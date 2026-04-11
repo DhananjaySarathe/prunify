@@ -9,9 +9,10 @@ import {
   buildGraph,
   findEntryPoints,
   buildReverseGraph,
+  isConventionRoutedSourceFile,
   type ImportGraph,
 } from '@/core/graph.js'
-import { writeJson, writeMarkdown } from '@/core/reporter.js'
+import { writeJson, writeMarkdown, formatBytes } from '@/core/reporter.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -128,7 +129,7 @@ export function runDeadCodeModule(
 
   // Dead exports from live files
   const liveFiles = new Set(allFiles.filter((f) => !deadSet.has(f)))
-  const deadExports = findDeadExports(project, liveFiles)
+  const deadExports = findDeadExports(project, liveFiles, rootDir)
 
   const report = buildDeadCodeReport(
     safeToDelete,
@@ -186,15 +187,22 @@ function collectTransitiveChain(
  *
  * Handles: named exports, re-exports, default exports.
  * Skips exports that are pulled in via a namespace import (`import * as X`).
+ *
+ * Skips framework boundary files (`next.config`, `middleware`, …) and
+ * convention-routed sources (`pages/`, `src/pages/`, App Router entry files,
+ * `src/routes/` …) — their exports are not meant to be imported like normal modules.
  */
 export function findDeadExports(
   project: Project,
   liveFiles: Set<string>,
+  rootDir: string,
 ): DeadExport[] {
   const importedNames = buildImportedNameMap(project, liveFiles)
   const dead: DeadExport[] = []
 
   for (const filePath of liveFiles) {
+    if (isFrameworkFile(filePath, rootDir)) continue
+    if (isConventionRoutedSourceFile(filePath, rootDir)) continue
     collectFileDeadExports(filePath, project, importedNames, dead)
   }
 
@@ -239,6 +247,9 @@ export function getFileSize(filePath: string): number {
 
 // ─── Report builder ───────────────────────────────────────────────────────────
 
+const RULE = '─'.repeat(78)
+const RULE2 = '═'.repeat(78)
+
 export function buildDeadCodeReport(
   safeToDelete: string[],
   transitivelyDead: string[],
@@ -248,69 +259,141 @@ export function buildDeadCodeReport(
 ): string {
   const rel = (p: string) => path.relative(rootDir, p).replaceAll('\\', '/')
 
-  const allDeadFiles = [...safeToDelete, ...transitivelyDead]
-  const totalBytes = allDeadFiles.reduce((sum, f) => sum + getFileSize(f), 0)
-  const totalKb = (totalBytes / 1024).toFixed(1)
+  const sortPaths = (paths: string[]) =>
+    [...paths].sort((a, b) => rel(a).localeCompare(rel(b), 'en'))
+
+  const safeSorted = sortPaths(safeToDelete)
+  const transSorted = sortPaths(transitivelyDead)
+
+  const safeBytes = safeSorted.reduce((s, f) => s + getFileSize(f), 0)
+  const transBytes = transSorted.reduce((s, f) => s + getFileSize(f), 0)
+  const fileDeleteBytes = safeBytes + transBytes
+  const totalKb = (fileDeleteBytes / 1024).toFixed(1)
+
+  const deadExportFiles = new Set(deadExports.map((e) => e.filePath))
+  const deadExportFileBytes = [...deadExportFiles].reduce((s, f) => s + getFileSize(f), 0)
 
   const lines: string[] = [
-    '========================================',
+    RULE2,
     '  DEAD CODE REPORT',
+    RULE2,
     `  Safe to delete     : ${safeToDelete.length}`,
     `  Transitively dead  : ${transitivelyDead.length}`,
     `  Dead exports       : ${deadExports.length}`,
-    `  Recoverable        : ~${totalKb} KB`,
-    '========================================',
+    `  Recoverable (files): ~${totalKb} KB  (${formatBytes(fileDeleteBytes)})`,
+    RULE2,
+    '',
+    '  HOW TO READ THIS',
+    '',
+    '  1. SAFE TO DELETE — No other source file imports these. You can delete them',
+    '     first (after review).',
+    '  2. TRANSITIVELY DEAD — Only referenced by files that are already dead. After',
+    '     removing safe-to-delete files, these become removable too.',
+    '  3. DEAD EXPORTS — The file is still used, but the listed export is never',
+    '     imported by name. Remove the export (or use it) to tidy the API.',
+    '     Framework routes (pages/, app/, etc.) are not listed here.',
+    '',
+    RULE,
     '',
   ]
 
-  // ── Safe to Delete ──
-  if (safeToDelete.length > 0) {
+  if (safeSorted.length > 0) {
     lines.push(
       '── SAFE TO DELETE ──',
-      '(These files are not imported by any other file in the codebase)',
+      '',
+      '  Nothing in the project imports these paths. Review, then delete.',
       '',
     )
-    for (const filePath of safeToDelete) {
+    for (const filePath of safeSorted) {
       const chain = chains.get(filePath) ?? []
-      const sizeKb = (getFileSize(filePath) / 1024).toFixed(1)
-
-      lines.push(`  ${rel(filePath)}  (~${sizeKb} KB)`)
-
+      const kb = (getFileSize(filePath) / 1024).toFixed(1)
+      lines.push(`  • ${rel(filePath)}  (~${kb} KB)`)
       if (chain.length > 0) {
-        lines.push(`    └─ also makes dead: ${chain.map(rel).join(', ')}`)
+        lines.push(
+          `      ↳ Also becomes orphaned if you delete the line above:`,
+          `        ${chain.map(rel).join(', ')}`,
+        )
       }
     }
-    lines.push('')
-  }
-
-  // ── Transitively Dead ──
-  if (transitivelyDead.length > 0) {
     lines.push(
-      '── TRANSITIVELY DEAD ──',
-      '(These files are only imported by dead files — they become orphaned too)',
+      '',
+      `  SUBTOTAL — ${safeSorted.length} file(s) · ${formatBytes(safeBytes)}`,
+      '',
+      RULE,
       '',
     )
-    for (const filePath of transitivelyDead) {
-      const sizeKb = (getFileSize(filePath) / 1024).toFixed(1)
-      lines.push(`  ${rel(filePath)}  (~${sizeKb} KB)`)
-    }
-    lines.push('')
   }
 
-  // ── Dead Exports ──
+  if (transSorted.length > 0) {
+    lines.push(
+      '── TRANSITIVELY DEAD ──',
+      '',
+      '  Every importer of these files is already in the dead set above.',
+      '',
+    )
+    for (const filePath of transSorted) {
+      const kb = (getFileSize(filePath) / 1024).toFixed(1)
+      lines.push(`  • ${rel(filePath)}  (~${kb} KB)`)
+    }
+    lines.push(
+      '',
+      `  SUBTOTAL — ${transSorted.length} file(s) · ${formatBytes(transBytes)}`,
+      '',
+      RULE,
+      '',
+    )
+  }
+
   if (deadExports.length > 0) {
     lines.push(
       '── DEAD EXPORTS ──',
-      '(Exported but never imported by any other file)',
+      '',
+      '  Symbol is exported but never imported by name elsewhere (namespace imports',
+      '  count as “all used”). Route and framework files are excluded.',
       '',
     )
-    for (const entry of deadExports) {
-      lines.push(
-        `  ${rel(entry.filePath)} → ${entry.exportName} [line ${entry.line}]`,
-      )
+    const byFile = new Map<string, DeadExport[]>()
+    for (const e of deadExports) {
+      if (!byFile.has(e.filePath)) byFile.set(e.filePath, [])
+      byFile.get(e.filePath)!.push(e)
     }
-    lines.push('')
+    const fileKeys = [...byFile.keys()].sort((a, b) => rel(a).localeCompare(rel(b), 'en'))
+    for (const fp of fileKeys) {
+      lines.push(`  ${rel(fp)}`)
+      for (const entry of byFile.get(fp)!) {
+        lines.push(`      • export “${entry.exportName}”  (line ${entry.line})`)
+      }
+      lines.push('')
+    }
+    lines.push(
+      `  SUBTOTAL — ${deadExports.length} export(s) across ${deadExportFiles.size} file(s)`,
+      '',
+      RULE,
+      '',
+    )
   }
+
+  lines.push(
+    RULE2,
+    '  END OF REPORT — DISK SPACE & CLEANUP SUMMARY',
+    RULE2,
+    '',
+    '  If you DELETE every file under “Safe to delete” and “Transitively dead”:',
+    '',
+    `      Files removed : ${safeSorted.length + transSorted.length}`,
+    `      Disk freed    : ${formatBytes(fileDeleteBytes)}  (approx., from file sizes on disk)`,
+    '',
+    '  Dead exports do not remove whole files by themselves. Cleaning them saves',
+    `  maintainability first; the ${deadExportFiles.size} file(s) that contain them`,
+    `  total about ${formatBytes(deadExportFileBytes)} on disk (entire files, not`,
+    '  “export-only” savings).',
+    '',
+    '  Suggested order: (1) Delete safe-to-delete files → (2) Delete transitively',
+    '  dead files → (3) Remove or use dead exports in remaining files.',
+    '',
+    RULE2,
+    '',
+  )
 
   return lines.join('\n')
 }
