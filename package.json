@@ -24,7 +24,7 @@
   "author": "Dhananjay Sarathe",
   "repository": {
     "type": "git",
-    "url": "https://github.com/DhananjaySarathe/prunify.git"
+    "url": "git+https://github.com/DhananjaySarathe/prunify.git"
   },
   "homepage": "https://github.com/DhananjaySarathe/prunify#readme",
   "bugs": {
