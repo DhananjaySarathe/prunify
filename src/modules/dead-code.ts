@@ -9,6 +9,7 @@ import {
   buildGraph,
   findEntryPoints,
   findDeadChains,
+  findRootFiles,
   runDFS,
   type ImportGraph,
 } from '@/core/graph.js'
@@ -52,7 +53,7 @@ export function runDeadCodeModule(
   rootDir: string,
 ): DeadCodeResult {
   const allFiles = [...graph.keys()]
-  const effectiveEntries = entryPoints.length > 0 ? entryPoints : allFiles.slice(0, 1)
+  const effectiveEntries = entryPoints.length > 0 ? entryPoints : findRootFiles(graph)
 
   const liveFiles = runDFS(graph, effectiveEntries)
   const deadFiles = allFiles.filter((f) => !liveFiles.has(f))
