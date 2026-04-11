@@ -326,8 +326,8 @@ function isOnlyImportedByDead(
 
 // â”€â”€â”€ General helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/** Reverses all edges in the graph. */
-function buildReverseGraph(graph: ImportGraph): Map<string, Set<string>> {
+/** Reverses all edges in the graph: for each edge A→B, creates B→A. */
+export function buildReverseGraph(graph: ImportGraph): Map<string, Set<string>> {
   const rev = new Map<string, Set<string>>()
 
   for (const [file] of graph) {

@@ -29,21 +29,21 @@ describe('getFileSize', () => {
 
 describe('buildDeadCodeReport', () => {
   it('includes file counts in the header', () => {
-    const report = buildDeadCodeReport(['src/dead.ts'], new Map(), [], '/root')
-    expect(report).toContain('Dead files : 1')
-    expect(report).toContain('Dead exports: 0')
+    const report = buildDeadCodeReport(['src/dead.ts'], [], new Map(), [], '/root')
+    expect(report).toContain('Safe to delete     : 1')
+    expect(report).toContain('Dead exports       : 0')
   })
 
   it('includes dead file entries', () => {
-    const report = buildDeadCodeReport(['/root/src/dead.ts'], new Map(), [], '/root')
+    const report = buildDeadCodeReport(['/root/src/dead.ts'], [], new Map(), [], '/root')
     expect(report).toContain('src/dead.ts')
-    expect(report).toContain('DEAD FILE')
+    expect(report).toContain('SAFE TO DELETE')
   })
 
   it('includes dead export entries', () => {
     const deadExports = [{ filePath: '/root/src/live.ts', exportName: 'orphan', line: 5 }]
-    const report = buildDeadCodeReport([], new Map(), deadExports, '/root')
-    expect(report).toContain('DEAD EXPORT')
+    const report = buildDeadCodeReport([], [], new Map(), deadExports, '/root')
+    expect(report).toContain('DEAD EXPORTS')
     expect(report).toContain('orphan')
     expect(report).toContain('line 5')
   })

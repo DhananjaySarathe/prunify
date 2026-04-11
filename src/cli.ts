@@ -148,9 +148,15 @@ async function main(opts: CliOptions): Promise<void> {
   if (modules.includes('dead-code')) {
     const spinner = createSpinner(chalk.cyan('Analysing dead code…'))
     const result = runDeadCodeModule(project, graph, entryPoints, rootDir)
-    deadFileCount = result.deadFiles.length + result.deadExports.length
-    deadFilePaths.push(...result.deadFiles)
-    spinner.succeed(chalk.green(`Dead code analysis complete — ${deadFileCount} item(s) found`))
+    deadFileCount = result.safeToDelete.length + result.transitivelyDead.length + result.deadExports.length
+    deadFilePaths.push(...result.safeToDelete, ...result.transitivelyDead)
+    spinner.succeed(
+      chalk.green(
+        `Dead code analysis complete — ${result.safeToDelete.length} safe to delete, ` +
+        `${result.transitivelyDead.length} transitively dead, ` +
+        `${result.deadExports.length} dead export(s)`,
+      ),
+    )
 
     if (result.report) {
       deadReportFile = 'dead-code.txt'
@@ -173,10 +179,25 @@ async function main(opts: CliOptions): Promise<void> {
 
     if (circularCount > 0) {
       circularReportFile = 'circular.txt'
-      const cycleText = cycles
-        .map((c, i) => `Cycle ${i + 1}: ${c.join(' → ')}`)
-        .join('\n')
-      writeReport(reportsDir, circularReportFile, cycleText)
+      const rel = (p: string) => path.relative(rootDir, p).replaceAll('\\', '/')
+      const cycleLines: string[] = [
+        '========================================',
+        '  CIRCULAR DEPENDENCIES',
+        `  Cycles found: ${cycles.length}`,
+        '========================================',
+        '',
+      ]
+      for (let i = 0; i < cycles.length; i++) {
+        const cycle = cycles[i]!
+        cycleLines.push(`Cycle ${i + 1} (${cycle.length} files):`)
+        for (let j = 0; j < cycle.length; j++) {
+          const arrow = j < cycle.length - 1 ? '  → ' : '  → '
+          cycleLines.push(`  ${rel(cycle[j])}`)
+        }
+        cycleLines.push(`  ↻ ${rel(cycle[0])}  (back to start)`)
+        cycleLines.push('')
+      }
+      writeReport(reportsDir, circularReportFile, cycleLines.join('\n'))
     }
   }
 
@@ -219,10 +240,10 @@ async function main(opts: CliOptions): Promise<void> {
   const fmt = (n: number) => (n > 0 ? chalk.yellow(String(n)) : chalk.green('0'))
 
   table.push(
-    ['Dead Files / Exports', fmt(deadFileCount), deadReportFile || '—'],
+    ['Dead Code (files + exports)', fmt(deadFileCount), deadReportFile || '—'],
+    ['Circular Dependencies', fmt(circularCount), circularReportFile || '—'],
     ['Duplicate Clusters', fmt(dupeCount), dupesReportFile || '—'],
     ['Unused Packages', fmt(unusedPkgCount), depsReportFile || '—'],
-    ['Circular Deps', fmt(circularCount), circularReportFile || '—'],
     ['Unused Assets', fmt(unusedAssetCount), assetsReportFile || '—'],
   )
 
