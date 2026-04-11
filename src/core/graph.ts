@@ -48,13 +48,15 @@ export function buildGraph(
  *
  * Resolution order:
  *  1. Next.js: all files inside `pages/` and `app/` directories.
- *  2. package.json `"main"` and `"module"` fields.
- *  3. Common fallbacks: src/main, src/index, src/App, index (all extensions).
+ *  2. File-based routing: src/pages/, src/routes/, src/views/ (Vite, React Router, etc.)
+ *  3. package.json `"main"` and `"module"` fields.
+ *  4. Common fallbacks: src/main, src/index, src/App, index (all extensions).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function findEntryPoints(rootDir: string, packageJson: any): string[] {
   const entries = [
     ...resolveNextJsEntries(rootDir),
+    ...resolveFileBrowserEntries(rootDir),
     ...resolvePkgFieldEntries(rootDir, packageJson),
     ...resolveFallbackEntries(rootDir),
   ]
@@ -165,8 +167,23 @@ function resolveNextJsEntries(rootDir: string): string[] {
   if (!isNext) return []
 
   const entries: string[] = []
-  for (const dir of ['pages', 'app'] as const) {
+  for (const dir of ['pages', 'app', 'src/pages', 'src/app'] as const) {
     const dirPath = path.join(rootDir, dir)
+    if (fs.existsSync(dirPath)) entries.push(...collectSourceFiles(dirPath))
+  }
+  return entries
+}
+
+/**
+ * Treats files inside common page/route directories as entry points.
+ * Covers Vite + React Router, TanStack Router, Expo, and similar setups
+ * where pages live in src/pages/, src/routes/, or src/views/.
+ */
+function resolveFileBrowserEntries(rootDir: string): string[] {
+  const PAGE_DIRS = ['src/pages', 'src/routes', 'src/views', 'src/screens']
+  const entries: string[] = []
+  for (const rel of PAGE_DIRS) {
+    const dirPath = path.join(rootDir, rel)
     if (fs.existsSync(dirPath)) entries.push(...collectSourceFiles(dirPath))
   }
   return entries

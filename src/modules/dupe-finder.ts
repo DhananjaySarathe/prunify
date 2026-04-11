@@ -19,15 +19,23 @@ export interface DuplicateBlock {
   occurrences: Array<{ file: string; startLine: number }>
 }
 
+// Minimum number of meaningful (non-whitespace) characters a block must have
+// to be worth reporting. Filters out blocks that are all braces/imports/short lines.
+const MIN_BLOCK_CHARS = 120
+
 /**
  * Detects duplicate code blocks across files using a rolling line-hash approach.
  */
 export async function runDupeFinder(dir: string, opts: DupeFinderOptions): Promise<DuplicateBlock[]> {
-  const minLines = parseInt(opts.minLines ?? '5', 10)
+  const minLines = parseInt(opts.minLines ?? '15', 10)
   const spinner = ora(chalk.cyan(`Scanning for duplicate blocks (≥${minLines} lines)…`)).start()
 
   try {
-    const files = glob(dir, ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'], ['node_modules', 'dist'])
+    const files = glob(dir, ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'], [
+      'node_modules', 'dist', '.next', 'coverage',
+      '**/*.test.ts', '**/*.test.tsx', '**/*.spec.ts', '**/*.spec.tsx',
+      '**/*.d.ts',
+    ])
     const blockMap = new Map<string, Array<{ file: string; startLine: number }>>()
 
     for (const filePath of files) {
@@ -36,6 +44,9 @@ export async function runDupeFinder(dir: string, opts: DupeFinderOptions): Promi
 
       for (let i = 0; i <= lines.length - minLines; i++) {
         const block = lines.slice(i, i + minLines).join('\n')
+        // Skip blocks that are mostly boilerplate / too short to be meaningful
+        const meaningfulChars = block.replace(/[\s{}();,]/g, '').length
+        if (meaningfulChars < MIN_BLOCK_CHARS) continue
         if (!blockMap.has(block)) blockMap.set(block, [])
         blockMap.get(block)!.push({ file: filePath, startLine: i + 1 })
       }
@@ -52,6 +63,10 @@ export async function runDupeFinder(dir: string, opts: DupeFinderOptions): Promi
         })
       }
     }
+
+    // Sort by most occurrences first, cap at 200 to keep reports readable
+    dupes.sort((a, b) => b.occurrences.length - a.occurrences.length)
+    if (dupes.length > 200) dupes.splice(200)
 
     spinner.succeed(chalk.green(`Duplicate scan complete — ${dupes.length} duplicate block(s) found`))
 
