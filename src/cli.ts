@@ -216,7 +216,8 @@ async function main(opts: CliOptions): Promise<void> {
   }
 
   if (loadAssetsFromCache) {
-    assetsReportFile = 'assets.md'
+    const assetsTxtPath = path.join(reportsDir, 'assets.txt')
+    assetsReportFile = fs.existsSync(assetsTxtPath) ? 'assets.md, assets.txt' : 'assets.md'
     unusedAssetCount = unusedAssetPaths.length
   }
 
@@ -293,7 +294,7 @@ async function main(opts: CliOptions): Promise<void> {
     const unusedAssets = await runAssetCheck(rootDir, { output: outputPath })
     unusedAssetPaths = unusedAssets.map((a) => a.filePath)
     unusedAssetCount = unusedAssets.length
-    if (unusedAssetCount > 0) assetsReportFile = 'assets.md'
+    if (unusedAssetCount > 0) assetsReportFile = 'assets.md, assets.txt'
   }
 
   if (modules.includes('health')) {

@@ -133,22 +133,41 @@ export async function runAssetCheck(rootDir: string, opts: AssetCheckOptions): P
       writeMarkdown(
         {
           title: 'Unused Assets Report',
-          summary: `${result.unusedAssets.length} unused asset(s) found in public/`,
+          summary: `${result.unusedAssets.length} unused · ${formatBytes(result.unusedAssets.reduce((s, a) => s + a.sizeBytes, 0))} recoverable — see companion .txt for full detail`,
           sections: [
             {
               title: 'Unused Assets',
               headers: ['Asset', 'Size (KB)'],
-              rows: result.unusedAssets.map((a) => [
-                a.relativePath,
-                (a.sizeBytes / 1024).toFixed(1),
-              ]),
+              rows: result.unusedAssets
+                .slice()
+                .sort((a, b) => a.relativePath.localeCompare(b.relativePath, 'en'))
+                .map((a) => [a.relativePath, (a.sizeBytes / 1024).toFixed(1)]),
+            },
+            {
+              title: 'If you delete all listed files',
+              rows: [
+                [
+                  'Files removed',
+                  String(result.unusedAssets.length),
+                ],
+                [
+                  'Approx. disk freed',
+                  formatBytes(result.unusedAssets.reduce((s, a) => s + a.sizeBytes, 0)),
+                ],
+              ],
             },
           ],
           generatedAt: new Date(),
         },
         opts.output,
       )
-      console.log(chalk.cyan(`  Report written to ${opts.output}`))
+      const txtPath = path.join(
+        path.dirname(opts.output),
+        `${path.basename(opts.output, path.extname(opts.output))}.txt`,
+      )
+      fs.writeFileSync(txtPath, result.report, 'utf-8')
+      console.log(chalk.cyan(`  Reports written → ${opts.output}`))
+      console.log(chalk.cyan(`                  → ${txtPath}`))
     }
 
     return result.unusedAssets

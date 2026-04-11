@@ -85,7 +85,7 @@ export function countDeadExportsInReport(content: string): number {
       continue
     }
     if (section && line.startsWith('── ') && line.includes('──')) break
-    if (section && /\s→\s.+\[line \d+\]/.test(line)) n++
+    if (section && /\(line \d+\)/.test(line)) n++
   }
   return n
 }
