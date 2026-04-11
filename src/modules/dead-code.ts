@@ -8,9 +8,7 @@ import { discoverFiles, buildProject, getImportsForFile } from '@/core/parser.js
 import {
   buildGraph,
   findEntryPoints,
-  findDeadChains,
-  findRootFiles,
-  runDFS,
+  buildReverseGraph,
   type ImportGraph,
 } from '@/core/graph.js'
 import { writeJson, writeMarkdown } from '@/core/reporter.js'
@@ -24,6 +22,8 @@ export interface DeadExport {
 }
 
 export interface DeadCodeResult {
+  safeToDelete: string[]
+  transitivelyDead: string[]
   deadFiles: string[]
   liveFiles: Set<string>
   chains: Map<string, string[]>
@@ -36,15 +36,48 @@ export interface DeadCodeOptions {
   json?: boolean
 }
 
+// ─── Framework / config file patterns ─────────────────────────────────────────
+
+const FRAMEWORK_FILE_PATTERNS = [
+  /^next\.config\.(js|ts|mjs|cjs)$/,
+  /^middleware\.(ts|js)$/,
+  /^instrumentation\.(ts|js)$/,
+  /^tailwind\.config\.(js|ts|mjs|cjs)$/,
+  /^postcss\.config\.(js|ts|mjs|cjs)$/,
+  /^jest\.config\.(js|ts|mjs|cjs)$/,
+  /^vitest\.config\.(js|ts|mjs|cjs)$/,
+  /^vite\.config\.(js|ts|mjs|cjs)$/,
+  /^webpack\.config\.(js|ts|mjs|cjs)$/,
+  /^babel\.config\.(js|ts|cjs|mjs|json)$/,
+  /^\.babelrc\.(js|cjs)$/,
+  /^\.eslintrc\.(js|cjs)$/,
+  /^eslint\.config\.(js|ts|mjs|cjs)$/,
+  /^prettier\.config\.(js|ts|mjs|cjs)$/,
+  /^tsup\.config\.(ts|js)$/,
+  /^rollup\.config\.(js|ts|mjs)$/,
+  /^esbuild\.config\.(js|ts|mjs)$/,
+  /^commitlint\.config\.(js|ts)$/,
+  /^lint-staged\.config\.(js|ts|mjs|cjs)$/,
+  /^sentry\.(client|server|edge)\.config\.(ts|js)$/,
+]
+
+function isFrameworkFile(filePath: string, rootDir: string): boolean {
+  const rel = path.relative(rootDir, filePath)
+  const basename = path.basename(rel)
+  return FRAMEWORK_FILE_PATTERNS.some((re) => re.test(basename))
+}
+
 // ─── Public module API ────────────────────────────────────────────────────────
 
 /**
  * Orchestrates the full dead-code analysis pipeline.
  *
- * @param project      - A ts-morph Project containing all source files.
- * @param graph        - Pre-built import graph.
- * @param entryPoints  - Files to treat as reachable roots.
- * @param rootDir      - Project root (used for relative path display).
+ * Uses a reverse-graph approach: a file is "safe to delete" only when NO
+ * other file in the codebase imports it AND it is not a known entry point
+ * or framework configuration file.
+ *
+ * After identifying root orphans, iteratively finds files whose EVERY
+ * importer is already dead ("transitively dead").
  */
 export function runDeadCodeModule(
   project: Project,
@@ -53,18 +86,99 @@ export function runDeadCodeModule(
   rootDir: string,
 ): DeadCodeResult {
   const allFiles = [...graph.keys()]
-  const effectiveEntries = entryPoints.length > 0 ? entryPoints : findRootFiles(graph)
+  const entrySet = new Set(entryPoints)
+  const reverseGraph = buildReverseGraph(graph)
 
-  const liveFiles = runDFS(graph, effectiveEntries)
-  const deadFiles = allFiles.filter((f) => !liveFiles.has(f))
-  const deadSet = new Set(deadFiles)
+  const excludedFiles = new Set<string>()
+  for (const file of allFiles) {
+    if (isFrameworkFile(file, rootDir)) excludedFiles.add(file)
+  }
 
-  const chains = findDeadChains(graph, deadSet)
+  // 1. Safe to Delete: files with zero importers, not entry points, not config
+  const safeToDelete = allFiles.filter((f) => {
+    if (entrySet.has(f) || excludedFiles.has(f)) return false
+    const importers = reverseGraph.get(f)
+    return !importers || importers.size === 0
+  })
+
+  // 2. Transitively dead: files whose ALL importers are already dead
+  const deadSet = new Set(safeToDelete)
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const file of allFiles) {
+      if (deadSet.has(file) || entrySet.has(file) || excludedFiles.has(file)) continue
+      const importers = reverseGraph.get(file)
+      if (!importers || importers.size === 0) continue
+      if ([...importers].every((imp) => deadSet.has(imp))) {
+        deadSet.add(file)
+        changed = true
+      }
+    }
+  }
+
+  const transitivelyDead = [...deadSet].filter((f) => !safeToDelete.includes(f))
+
+  // Build chains: for each safe-to-delete root, list transitively dead dependants
+  const chains = new Map<string, string[]>()
+  for (const root of safeToDelete) {
+    const chain = collectTransitiveChain(root, graph, deadSet)
+    chains.set(root, chain)
+  }
+
+  // Dead exports from live files
+  const liveFiles = new Set(allFiles.filter((f) => !deadSet.has(f)))
   const deadExports = findDeadExports(project, liveFiles)
-  const report = buildDeadCodeReport(deadFiles, chains, deadExports, rootDir)
 
-  return { deadFiles, liveFiles, chains, deadExports, report }
+  const report = buildDeadCodeReport(
+    safeToDelete,
+    transitivelyDead,
+    chains,
+    deadExports,
+    rootDir,
+  )
+
+  return {
+    safeToDelete,
+    transitivelyDead,
+    deadFiles: [...deadSet],
+    liveFiles,
+    chains,
+    deadExports,
+    report,
+  }
 }
+
+/**
+ * Walks forward from a dead root along its imports, collecting only files
+ * that are also dead (i.e. would become orphaned if the root is deleted).
+ */
+function collectTransitiveChain(
+  root: string,
+  graph: ImportGraph,
+  deadSet: Set<string>,
+): string[] {
+  const chain: string[] = []
+  const visited = new Set<string>()
+  const stack = [...(graph.get(root) ?? [])]
+
+  let node: string | undefined
+  while ((node = stack.pop()) !== undefined) {
+    if (visited.has(node) || node === root) continue
+    visited.add(node)
+
+    if (deadSet.has(node)) {
+      chain.push(node)
+      for (const next of graph.get(node) ?? []) {
+        if (!visited.has(next)) stack.push(next)
+      }
+    }
+  }
+
+  return chain
+}
+
+// ─── Dead exports ─────────────────────────────────────────────────────────────
 
 /**
  * For every live file, finds named exports that are never used (imported by
@@ -123,69 +237,79 @@ export function getFileSize(filePath: string): number {
   }
 }
 
-/**
- * Builds a human-readable plain-text report suitable for writing to
- * `code_cleaning.txt`.
- */
+// ─── Report builder ───────────────────────────────────────────────────────────
+
 export function buildDeadCodeReport(
-  deadFiles: string[],
+  safeToDelete: string[],
+  transitivelyDead: string[],
   chains: Map<string, string[]>,
   deadExports: DeadExport[],
   rootDir: string,
 ): string {
   const rel = (p: string) => path.relative(rootDir, p).replaceAll('\\', '/')
 
-  const totalBytes = deadFiles.reduce((sum, f) => {
-    const chain = chains.get(f) ?? []
-    return sum + getFileSize(f) + chain.reduce((s, c) => s + getFileSize(c), 0)
-  }, 0)
+  const allDeadFiles = [...safeToDelete, ...transitivelyDead]
+  const totalBytes = allDeadFiles.reduce((sum, f) => sum + getFileSize(f), 0)
   const totalKb = (totalBytes / 1024).toFixed(1)
 
   const lines: string[] = [
     '========================================',
     '  DEAD CODE REPORT',
-    `  Dead files : ${deadFiles.length}`,
-    `  Dead exports: ${deadExports.length}`,
-    `  Recoverable : ~${totalKb} KB`,
+    `  Safe to delete     : ${safeToDelete.length}`,
+    `  Transitively dead  : ${transitivelyDead.length}`,
+    `  Dead exports       : ${deadExports.length}`,
+    `  Recoverable        : ~${totalKb} KB`,
     '========================================',
     '',
   ]
 
-  if (deadFiles.length > 0) {
-    lines.push('── DEAD FILES ──', '')
-    for (const filePath of deadFiles) {
+  // ── Safe to Delete ──
+  if (safeToDelete.length > 0) {
+    lines.push(
+      '── SAFE TO DELETE ──',
+      '(These files are not imported by any other file in the codebase)',
+      '',
+    )
+    for (const filePath of safeToDelete) {
       const chain = chains.get(filePath) ?? []
-      const allFiles = [filePath, ...chain]
-      const sizeBytes = allFiles.reduce((s, f) => s + getFileSize(f), 0)
-      const sizeKb = (sizeBytes / 1024).toFixed(1)
-      const chainStr =
-        chain.length > 0
-          ? [rel(filePath), ...chain.map(rel)].join(' → ')
-          : rel(filePath)
+      const sizeKb = (getFileSize(filePath) / 1024).toFixed(1)
 
-      const plural = allFiles.length === 1 ? '' : 's'
+      lines.push(`  ${rel(filePath)}  (~${sizeKb} KB)`)
 
-      lines.push(
-        `DEAD FILE — ${rel(filePath)}`,
-        `Reason: Not imported anywhere in the codebase`,
-        `Chain: ${chainStr}`,
-        `Size: ~${sizeKb} KB removable across ${allFiles.length} file${plural}`,
-        `Action: Safe to delete all ${allFiles.length} file${plural}`,
-        '',
-      )
+      if (chain.length > 0) {
+        lines.push(`    └─ also makes dead: ${chain.map(rel).join(', ')}`)
+      }
     }
+    lines.push('')
   }
 
+  // ── Transitively Dead ──
+  if (transitivelyDead.length > 0) {
+    lines.push(
+      '── TRANSITIVELY DEAD ──',
+      '(These files are only imported by dead files — they become orphaned too)',
+      '',
+    )
+    for (const filePath of transitivelyDead) {
+      const sizeKb = (getFileSize(filePath) / 1024).toFixed(1)
+      lines.push(`  ${rel(filePath)}  (~${sizeKb} KB)`)
+    }
+    lines.push('')
+  }
+
+  // ── Dead Exports ──
   if (deadExports.length > 0) {
-    lines.push('── DEAD EXPORTS ──', '')
+    lines.push(
+      '── DEAD EXPORTS ──',
+      '(Exported but never imported by any other file)',
+      '',
+    )
     for (const entry of deadExports) {
       lines.push(
-        `DEAD EXPORT — ${rel(entry.filePath)} → ${entry.exportName}() [line ${entry.line}]`,
-        `Reason: Exported but never imported`,
-        `Action: Remove the export (file itself is still live)`,
-        '',
+        `  ${rel(entry.filePath)} → ${entry.exportName} [line ${entry.line}]`,
       )
     }
+    lines.push('')
   }
 
   return lines.join('\n')
@@ -193,7 +317,6 @@ export function buildDeadCodeReport(
 
 // ─── CLI command (backward-compatible) ───────────────────────────────────────
 
-/** Legacy interface used by the CLI table printer. */
 interface DeadExportRow {
   file: string
   exportName: string
@@ -215,9 +338,9 @@ export async function runDeadCode(dir: string, opts: DeadCodeOptions): Promise<D
 
     const result = runDeadCodeModule(project, graph, entries, dir)
 
-    // Flatten dead files → rows
     const dead: DeadExportRow[] = [
-      ...result.deadFiles.map((f) => ({ file: f, exportName: '(entire file)' })),
+      ...result.safeToDelete.map((f) => ({ file: f, exportName: '(entire file — safe to delete)' })),
+      ...result.transitivelyDead.map((f) => ({ file: f, exportName: '(entire file — transitively dead)' })),
       ...result.deadExports.map((e) => ({ file: e.filePath, exportName: e.exportName })),
     ]
 
@@ -240,11 +363,6 @@ export async function runDeadCode(dir: string, opts: DeadCodeOptions): Promise<D
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-/**
- * Builds a map of `filePath → Set<exportName>` for every name that is
- * imported from that file by any live file.  A `*` entry means the file is
- * namespace-imported and all its exports are considered used.
- */
 function buildImportedNameMap(
   project: Project,
   liveFiles: Set<string>,
@@ -328,7 +446,11 @@ function writeDeadOutput(result: DeadCodeResult, opts: DeadCodeOptions): void {
 
   if (opts.json) {
     writeJson(
-      { deadFiles: result.deadFiles, deadExports: result.deadExports },
+      {
+        safeToDelete: result.safeToDelete,
+        transitivelyDead: result.transitivelyDead,
+        deadExports: result.deadExports,
+      },
       opts.output,
     )
     console.log(chalk.cyan(`  JSON written to ${opts.output}`))
@@ -338,15 +460,20 @@ function writeDeadOutput(result: DeadCodeResult, opts: DeadCodeOptions): void {
   writeMarkdown(
     {
       title: 'Dead Code Report',
-      summary: `${result.deadFiles.length} dead file(s), ${result.deadExports.length} dead export(s)`,
+      summary: `${result.safeToDelete.length} safe to delete, ${result.transitivelyDead.length} transitively dead, ${result.deadExports.length} dead export(s)`,
       sections: [
         {
-          title: 'Dead Files',
+          title: 'Safe to Delete',
           headers: ['File', 'Chain'],
-          rows: result.deadFiles.map((f) => [
+          rows: result.safeToDelete.map((f) => [
             f,
             (result.chains.get(f) ?? []).join(' → ') || '—',
           ]),
+        },
+        {
+          title: 'Transitively Dead',
+          headers: ['File'],
+          rows: result.transitivelyDead.map((f) => [f]),
         },
         {
           title: 'Dead Exports',

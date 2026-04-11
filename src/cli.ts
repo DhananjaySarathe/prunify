@@ -44,6 +44,11 @@ import {
   appendToGitignore,
   writeReport,
 } from '@/core/reporter.js'
+import {
+  parseDeadCodeReportFile,
+  parseAssetsReportFile,
+  countDeadExportsInReport,
+} from '@/core/report-parser.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -59,6 +64,7 @@ interface CliOptions {
   out?: string
   html?: boolean
   delete?: boolean
+  deleteAssets?: boolean
   ci?: boolean
 }
 
@@ -81,7 +87,11 @@ program
   )
   .option('--out <path>', 'Output directory for reports')
   .option('--html', 'Also generate code_health.html')
-  .option('--delete', 'Prompt to delete dead files after analysis')
+  .option('--delete', 'Delete dead files (uses prunify-reports/dead-code.txt if present, else runs analysis)')
+  .option(
+    '--delete-assets',
+    'Delete unused public assets (uses prunify-reports/assets.md if present, else runs asset scan)',
+  )
   .option('--ci', 'CI mode: exit 1 if issues found, no interactive prompts')
   .action(main)
 
@@ -105,27 +115,65 @@ async function main(opts: CliOptions): Promise<void> {
   console.log(chalk.bold.cyan('🧹 prunify — npm run clean. ship with confidence.'))
   console.log()
 
-  // Step 3: Parse codebase
-  const parseSpinner = createSpinner(chalk.cyan('Parsing codebase…'))
-  const files = discoverFiles(rootDir, opts.ignore)
-  parseSpinner.succeed(chalk.green(`Parsed codebase — ${files.length} file(s) found`))
-
-  // Step 4: Build import graph
-  const graphSpinner = createSpinner(chalk.cyan('Building import graph…'))
-  const project = buildProject(files)
-  const graph: ImportGraph = buildGraph(files, (f) => {
-    const sf = project.getSourceFile(f)
-    return sf ? getImportsForFile(sf) : []
-  })
-  const edgeCount = [...graph.values()].reduce((n, s) => n + s.size, 0)
-  graphSpinner.succeed(chalk.green(`Import graph built — ${edgeCount} edge(s)`))
-
-  const packageJson = loadPackageJson(rootDir)
-  const entryPoints = opts.entry ? [path.resolve(opts.entry)] : findEntryPoints(rootDir, packageJson)
-
-  // Set up reports dir
   const reportsDir = ensureReportsDir(rootDir, opts.out)
   appendToGitignore(rootDir)
+
+  const deadReportPath = path.join(reportsDir, 'dead-code.txt')
+  const assetsReportPath = path.join(reportsDir, 'assets.md')
+
+  const loadDeadFromCache = Boolean(opts.delete && fs.existsSync(deadReportPath))
+  const loadAssetsFromCache = Boolean(opts.deleteAssets && fs.existsSync(assetsReportPath))
+
+  let deadFilePaths: string[] = []
+  let unusedAssetPaths: string[] = []
+
+  if (loadDeadFromCache) {
+    deadFilePaths = parseDeadCodeReportFile(deadReportPath, rootDir)
+    console.log(
+      chalk.cyan(
+        `  Using existing dead-code report (${deadFilePaths.length} file(s) to delete) → ${path.relative(rootDir, deadReportPath)}`,
+      ),
+    )
+  }
+
+  if (loadAssetsFromCache) {
+    unusedAssetPaths = parseAssetsReportFile(assetsReportPath, rootDir)
+    console.log(
+      chalk.cyan(
+        `  Using existing assets report (${unusedAssetPaths.length} asset(s) to delete) → ${path.relative(rootDir, assetsReportPath)}`,
+      ),
+    )
+  }
+
+  const runDeadCode =
+    !loadDeadFromCache && (modules.includes('dead-code') || Boolean(opts.delete))
+  const runCircular = modules.includes('circular')
+  const runAssets =
+    !loadAssetsFromCache && (modules.includes('assets') || Boolean(opts.deleteAssets))
+  const needsGraph = runCircular || runDeadCode
+
+  let files: string[] = []
+  let project!: ReturnType<typeof buildProject>
+  let graph!: ImportGraph
+  let entryPoints: string[] = []
+
+  if (needsGraph) {
+    const parseSpinner = createSpinner(chalk.cyan('Parsing codebase…'))
+    files = discoverFiles(rootDir, opts.ignore)
+    parseSpinner.succeed(chalk.green(`Parsed codebase — ${files.length} file(s) found`))
+
+    const graphSpinner = createSpinner(chalk.cyan('Building import graph…'))
+    project = buildProject(files)
+    graph = buildGraph(files, (f) => {
+      const sf = project.getSourceFile(f)
+      return sf ? getImportsForFile(sf) : []
+    })
+    const edgeCount = [...graph.values()].reduce((n, s) => n + s.size, 0)
+    graphSpinner.succeed(chalk.green(`Import graph built — ${edgeCount} edge(s)`))
+
+    const packageJson = loadPackageJson(rootDir)
+    entryPoints = opts.entry ? [path.resolve(opts.entry)] : findEntryPoints(rootDir, packageJson)
+  }
 
   console.log()
 
@@ -143,18 +191,38 @@ async function main(opts: CliOptions): Promise<void> {
   let circularReportFile = ''
   let assetsReportFile = ''
 
-  const deadFilePaths: string[] = []
+  if (loadDeadFromCache) {
+    deadReportFile = 'dead-code.txt'
+    try {
+      const raw = fs.readFileSync(deadReportPath, 'utf-8')
+      deadFileCount = deadFilePaths.length + countDeadExportsInReport(raw)
+    } catch {
+      deadFileCount = deadFilePaths.length
+    }
+  }
 
-  if (modules.includes('dead-code')) {
+  if (loadAssetsFromCache) {
+    assetsReportFile = 'assets.md'
+    unusedAssetCount = unusedAssetPaths.length
+  }
+
+  if (runDeadCode) {
     const spinner = createSpinner(chalk.cyan('Analysing dead code…'))
     const result = runDeadCodeModule(project, graph, entryPoints, rootDir)
-    deadFileCount = result.deadFiles.length + result.deadExports.length
-    deadFilePaths.push(...result.deadFiles)
-    spinner.succeed(chalk.green(`Dead code analysis complete — ${deadFileCount} item(s) found`))
+    deadFileCount = result.safeToDelete.length + result.transitivelyDead.length + result.deadExports.length
+    deadFilePaths = [...result.safeToDelete, ...result.transitivelyDead]
+    spinner.succeed(
+      chalk.green(
+        `Dead code analysis complete — ${result.safeToDelete.length} safe to delete, ` +
+        `${result.transitivelyDead.length} transitively dead, ` +
+        `${result.deadExports.length} dead export(s)`,
+      ),
+    )
 
     if (result.report) {
       deadReportFile = 'dead-code.txt'
-      writeReport(reportsDir, deadReportFile, result.report)
+      const banner = `prunify ${PKG_VERSION} — ${new Date().toISOString()}\n\n`
+      writeReport(reportsDir, deadReportFile, banner + result.report)
     }
   }
 
@@ -165,7 +233,7 @@ async function main(opts: CliOptions): Promise<void> {
     if (dupeCount > 0) dupesReportFile = 'dupes.md'
   }
 
-  if (modules.includes('circular')) {
+  if (runCircular) {
     const spinner = createSpinner(chalk.cyan('Analysing circular imports…'))
     const cycles = detectCycles(graph)
     circularCount = cycles.length
@@ -173,10 +241,26 @@ async function main(opts: CliOptions): Promise<void> {
 
     if (circularCount > 0) {
       circularReportFile = 'circular.txt'
-      const cycleText = cycles
-        .map((c, i) => `Cycle ${i + 1}: ${c.join(' → ')}`)
-        .join('\n')
-      writeReport(reportsDir, circularReportFile, cycleText)
+      const rel = (p: string) => path.relative(rootDir, p).replaceAll('\\', '/')
+      const cycleLines: string[] = [
+        '========================================',
+        '  CIRCULAR DEPENDENCIES',
+        `  Cycles found: ${cycles.length}`,
+        '========================================',
+        '',
+      ]
+      for (let i = 0; i < cycles.length; i++) {
+        const cycle = cycles[i]!
+        cycleLines.push(`Cycle ${i + 1} (${cycle.length} files):`)
+        for (let j = 0; j < cycle.length; j++) {
+          const arrow = j < cycle.length - 1 ? '  → ' : '  → '
+          cycleLines.push(`  ${rel(cycle[j])}`)
+        }
+        cycleLines.push(`  ↻ ${rel(cycle[0])}  (back to start)`)
+        cycleLines.push('')
+      }
+      const banner = `prunify ${PKG_VERSION} — ${new Date().toISOString()}\n\n`
+      writeReport(reportsDir, circularReportFile, banner + cycleLines.join('\n'))
     }
   }
 
@@ -187,9 +271,10 @@ async function main(opts: CliOptions): Promise<void> {
     if (issues.length > 0) depsReportFile = 'deps.md'
   }
 
-  if (modules.includes('assets')) {
+  if (runAssets) {
     const outputPath = path.join(reportsDir, 'assets.md')
     const unusedAssets = await runAssetCheck(rootDir, { output: outputPath })
+    unusedAssetPaths = unusedAssets.map((a) => a.filePath)
     unusedAssetCount = unusedAssets.length
     if (unusedAssetCount > 0) assetsReportFile = 'assets.md'
   }
@@ -219,36 +304,91 @@ async function main(opts: CliOptions): Promise<void> {
   const fmt = (n: number) => (n > 0 ? chalk.yellow(String(n)) : chalk.green('0'))
 
   table.push(
-    ['Dead Files / Exports', fmt(deadFileCount), deadReportFile || '—'],
+    ['Dead Code (files + exports)', fmt(deadFileCount), deadReportFile || '—'],
+    ['Circular Dependencies', fmt(circularCount), circularReportFile || '—'],
     ['Duplicate Clusters', fmt(dupeCount), dupesReportFile || '—'],
     ['Unused Packages', fmt(unusedPkgCount), depsReportFile || '—'],
-    ['Circular Deps', fmt(circularCount), circularReportFile || '—'],
     ['Unused Assets', fmt(unusedAssetCount), assetsReportFile || '—'],
   )
 
   console.log(table.toString())
   console.log()
 
-  // ─── --delete ─────────────────────────────────────────────────────────────
+  // ─── --delete (dead code files only) ─────────────────────────────────────
 
   if (opts.delete && deadFilePaths.length > 0) {
-    console.log(chalk.yellow(`Dead files (${deadFilePaths.length}):`))
+    console.log(chalk.yellow(`Dead code files to delete (${deadFilePaths.length}):`))
     for (const f of deadFilePaths) {
       console.log(chalk.dim(`  ${path.relative(rootDir, f)}`))
     }
     console.log()
 
     if (!opts.ci) {
-      const confirmed = await confirmPrompt('Delete these files? (y/N) ')
+      const confirmed = await confirmPrompt('Delete these dead code files? (y/N) ')
       if (confirmed) {
+        let removed = 0
         for (const f of deadFilePaths) {
-          fs.rmSync(f, { force: true })
+          try {
+            if (fs.existsSync(f)) {
+              fs.rmSync(f, { force: true })
+              removed++
+            }
+          } catch {
+            console.log(chalk.red(`  Failed to delete: ${path.relative(rootDir, f)}`))
+          }
         }
-        console.log(chalk.green(`  Deleted ${deadFilePaths.length} file(s).`))
+        console.log(chalk.green(`  Deleted ${removed} file(s).`))
       } else {
         console.log(chalk.dim('  Skipped.'))
       }
     }
+  } else if (opts.delete && deadFilePaths.length === 0) {
+    console.log(chalk.dim('  --delete: no dead code files listed in report (nothing to delete).'))
+  }
+
+  // ─── --delete-assets (public/ assets only) ────────────────────────────────
+
+  if (opts.deleteAssets && unusedAssetPaths.length > 0) {
+    const publicDir = path.join(rootDir, 'public')
+    const safePaths = unusedAssetPaths.filter((p) => {
+      const norm = path.normalize(p)
+      return norm.startsWith(path.normalize(publicDir + path.sep))
+    })
+    if (safePaths.length !== unusedAssetPaths.length) {
+      console.log(
+        chalk.yellow(
+          `  Warning: skipped ${unusedAssetPaths.length - safePaths.length} path(s) outside public/`,
+        ),
+      )
+    }
+
+    console.log(chalk.yellow(`Unused assets to delete (${safePaths.length}):`))
+    for (const f of safePaths) {
+      console.log(chalk.dim(`  ${path.relative(rootDir, f)}`))
+    }
+    console.log()
+
+    if (!opts.ci) {
+      const confirmed = await confirmPrompt('Delete these unused assets? (y/N) ')
+      if (confirmed) {
+        let removed = 0
+        for (const f of safePaths) {
+          try {
+            if (fs.existsSync(f)) {
+              fs.rmSync(f, { force: true })
+              removed++
+            }
+          } catch {
+            console.log(chalk.red(`  Failed to delete: ${path.relative(rootDir, f)}`))
+          }
+        }
+        console.log(chalk.green(`  Deleted ${removed} asset file(s).`))
+      } else {
+        console.log(chalk.dim('  Skipped.'))
+      }
+    }
+  } else if (opts.deleteAssets && unusedAssetPaths.length === 0) {
+    console.log(chalk.dim('  --delete-assets: no unused assets in report (nothing to delete).'))
   }
 
   // ─── --ci ─────────────────────────────────────────────────────────────────

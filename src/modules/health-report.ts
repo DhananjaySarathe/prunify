@@ -115,7 +115,7 @@ export function runHealthReportModule(
   const { dead, circular, deps, dupes } = allResults
 
   // ── Metrics ──────────────────────────────────────────────────────────────
-  const deadFileCount = dead.deadFiles.length
+  const deadFileCount = dead.safeToDelete.length + dead.transitivelyDead.length
   const dupeClusterCount = dupes.clusters.length
   const circularCount = circular.cycles.length
   const unusedPkgCount = deps.unusedPackages.length
@@ -183,12 +183,18 @@ function buildHealthReport(
 
   // Dead code section
   lines.push('── DEAD CODE ──', '')
-  if (dead.deadFiles.length === 0 && dead.deadExports.length === 0) {
+  const totalDeadFiles = dead.safeToDelete.length + dead.transitivelyDead.length
+  if (totalDeadFiles === 0 && dead.deadExports.length === 0) {
     lines.push('  No dead files or exports detected.', '')
   } else {
-    if (dead.deadFiles.length > 0) {
-      lines.push(`  Dead files: ${dead.deadFiles.length}`)
-      for (const f of dead.deadFiles) lines.push(`    • ${f}`)
+    if (dead.safeToDelete.length > 0) {
+      lines.push(`  Safe to delete: ${dead.safeToDelete.length}`)
+      for (const f of dead.safeToDelete) lines.push(`    • ${f}`)
+      lines.push('')
+    }
+    if (dead.transitivelyDead.length > 0) {
+      lines.push(`  Transitively dead: ${dead.transitivelyDead.length}`)
+      for (const f of dead.transitivelyDead) lines.push(`    • ${f}`)
       lines.push('')
     }
     if (dead.deadExports.length > 0) {
@@ -251,7 +257,7 @@ function buildHealthReport(
   // Deductions summary
   lines.push('── SCORE BREAKDOWN ──', '')
   lines.push(`  Starting score              : 100`)
-  lines.push(`  Dead files  (-${Math.min(dead.deadFiles.length * 2, 20)})`)
+  lines.push(`  Dead files  (-${Math.min((dead.safeToDelete.length + dead.transitivelyDead.length) * 2, 20)})`)
   lines.push(`  Dupe clusters (-${Math.min(dupes.clusters.length * 3, 15)})`)
   lines.push(`  Circular deps (-${Math.min(circular.cycles.length * 5, 20)})`)
   lines.push(`  Unused packages (-${Math.min(deps.unusedPackages.length * 2, 10)})`)
@@ -305,7 +311,8 @@ function buildHealthHtml(
   }
 
   const deadRows: [string, string][] = [
-    ...dead.deadFiles.map<[string, string]>((f) => [f, 'Dead file']),
+    ...dead.safeToDelete.map<[string, string]>((f) => [f, 'Safe to delete']),
+    ...dead.transitivelyDead.map<[string, string]>((f) => [f, 'Transitively dead']),
     ...dead.deadExports.map<[string, string]>((e) => [`${e.filePath}:${e.line}`, `export ${e.exportName}`]),
   ]
 

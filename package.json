@@ -1,6 +1,6 @@
 {
   "name": "prunify",
-  "version": "0.1.2",
+  "version": "0.1.6",
   "description": "CLI tool for codebase analysis: dead code, duplicates, circular deps, and health reports",
   "type": "module",
   "bin": {
