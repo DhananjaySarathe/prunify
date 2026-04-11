@@ -49,22 +49,33 @@ export function buildGraph(
  * Resolution order:
  *  1. Next.js: all files inside `pages/` and `app/` directories.
  *  2. package.json `"main"` and `"module"` fields.
- *  3. Vite / generic fallback: `src/main.ts`, `src/main.tsx`, `src/index.ts`,
- *     `src/index.tsx`.
+ *  3. Common fallbacks: src/main, src/index, src/App, index (all extensions).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function findEntryPoints(rootDir: string, packageJson: any): string[] {
   const entries = [
     ...resolveNextJsEntries(rootDir),
     ...resolvePkgFieldEntries(rootDir, packageJson),
+    ...resolveFallbackEntries(rootDir),
   ]
 
-  if (entries.length === 0) {
-    const fallback = resolveFallbackEntry(rootDir)
-    if (fallback) entries.push(fallback)
-  }
-
   return [...new Set(entries)]
+}
+
+/**
+ * Returns files in the graph that are not imported by any other file —
+ * i.e. natural roots of the dependency tree.
+ *
+ * If every file is imported by at least one other (e.g. a full circular graph),
+ * returns all files so nothing is incorrectly flagged as dead.
+ */
+export function findRootFiles(graph: ImportGraph): string[] {
+  const imported = new Set<string>()
+  for (const deps of graph.values()) {
+    for (const dep of deps) imported.add(dep)
+  }
+  const roots = [...graph.keys()].filter((f) => !imported.has(f))
+  return roots.length > 0 ? roots : [...graph.keys()]
 }
 
 /**
@@ -173,13 +184,16 @@ function resolvePkgFieldEntries(rootDir: string, packageJson: any): string[] {
   return entries
 }
 
-function resolveFallbackEntry(rootDir: string): string | undefined {
-  const fallbacks = ['src/main.ts', 'src/main.tsx', 'src/index.ts', 'src/index.tsx']
-  for (const rel of fallbacks) {
-    const abs = path.join(rootDir, rel)
-    if (fs.existsSync(abs)) return abs
-  }
-  return undefined
+function resolveFallbackEntries(rootDir: string): string[] {
+  const candidates = [
+    'src/main.ts', 'src/main.tsx', 'src/main.js', 'src/main.jsx',
+    'src/index.ts', 'src/index.tsx', 'src/index.js', 'src/index.jsx',
+    'src/App.ts', 'src/App.tsx', 'src/App.js', 'src/App.jsx',
+    'index.ts', 'index.tsx', 'index.js', 'index.jsx',
+  ]
+  return candidates
+    .map((rel) => path.join(rootDir, rel))
+    .filter((abs) => fs.existsSync(abs))
 }
 
 // â”€â”€â”€ Cycle detection helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

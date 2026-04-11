@@ -37,6 +37,7 @@ import { runDeadCodeModule } from '@/modules/dead-code.js'
 import { runDupeFinder } from '@/modules/dupe-finder.js'
 import { runDepCheck } from '@/modules/dep-check.js'
 import { runHealthReport } from '@/modules/health-report.js'
+import { runAssetCheck } from '@/modules/assets.js'
 import {
   createSpinner,
   ensureReportsDir,
@@ -46,9 +47,9 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Module = 'dead-code' | 'dupes' | 'circular' | 'deps' | 'health'
+type Module = 'dead-code' | 'dupes' | 'circular' | 'deps' | 'assets' | 'health'
 
-const ALL_MODULES: Module[] = ['dead-code', 'dupes', 'circular', 'deps']
+const ALL_MODULES: Module[] = ['dead-code', 'dupes', 'circular', 'deps', 'assets']
 
 interface CliOptions {
   dir: string
@@ -134,11 +135,13 @@ async function main(opts: CliOptions): Promise<void> {
   let dupeCount = 0
   let unusedPkgCount = 0
   let circularCount = 0
+  let unusedAssetCount = 0
 
   let deadReportFile = ''
   let dupesReportFile = ''
   let depsReportFile = ''
   let circularReportFile = ''
+  let assetsReportFile = ''
 
   const deadFilePaths: string[] = []
 
@@ -184,6 +187,13 @@ async function main(opts: CliOptions): Promise<void> {
     if (issues.length > 0) depsReportFile = 'deps.md'
   }
 
+  if (modules.includes('assets')) {
+    const outputPath = path.join(reportsDir, 'assets.md')
+    const unusedAssets = await runAssetCheck(rootDir, { output: outputPath })
+    unusedAssetCount = unusedAssets.length
+    if (unusedAssetCount > 0) assetsReportFile = 'assets.md'
+  }
+
   if (modules.includes('health')) {
     const outputPath = path.join(reportsDir, 'health-report.md')
     await runHealthReport(rootDir, { output: outputPath })
@@ -213,6 +223,7 @@ async function main(opts: CliOptions): Promise<void> {
     ['Duplicate Clusters', fmt(dupeCount), dupesReportFile || '—'],
     ['Unused Packages', fmt(unusedPkgCount), depsReportFile || '—'],
     ['Circular Deps', fmt(circularCount), circularReportFile || '—'],
+    ['Unused Assets', fmt(unusedAssetCount), assetsReportFile || '—'],
   )
 
   console.log(table.toString())
@@ -243,7 +254,7 @@ async function main(opts: CliOptions): Promise<void> {
   // ─── --ci ─────────────────────────────────────────────────────────────────
 
   if (opts.ci) {
-    const hasIssues = deadFileCount > 0 || dupeCount > 0 || unusedPkgCount > 0 || circularCount > 0
+    const hasIssues = deadFileCount > 0 || dupeCount > 0 || unusedPkgCount > 0 || circularCount > 0 || unusedAssetCount > 0
     if (hasIssues) process.exit(1)
   }
 }
