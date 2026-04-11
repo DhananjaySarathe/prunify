@@ -3,6 +3,7 @@ import path from 'node:path'
 import {
   parseDeadCodeReportContent,
   parseAssetsReportContent,
+  parseDeadCodeReportSummary,
 } from '@/core/report-parser.js'
 
 const root = '/proj'
@@ -52,6 +53,31 @@ Reason: x
 `
     const paths = parseDeadCodeReportContent(txt, root)
     expect(paths).toEqual([path.join(root, 'src/legacy-dead.ts')])
+  })
+})
+
+describe('parseDeadCodeReportSummary', () => {
+  it('parses DEAD CODE REPORT header', () => {
+    const txt = `prunify 1.0.0 — x
+
+========================================
+  DEAD CODE REPORT
+  Safe to delete     : 199
+  Transitively dead  : 58
+  Dead exports       : 952
+  Recoverable        : ~816.9 KB
+========================================`
+    const s = parseDeadCodeReportSummary(txt)
+    expect(s).toEqual({
+      safeToDelete: 199,
+      transitivelyDead: 58,
+      deadExports: 952,
+      recoverableDisplay: '~816.9 KB',
+    })
+  })
+
+  it('returns null for legacy header', () => {
+    expect(parseDeadCodeReportSummary('Dead files : 9')).toBeNull()
   })
 })
 

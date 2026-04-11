@@ -93,7 +93,7 @@ describe('findDeadExports', () => {
     project.createSourceFile('/src/main.ts', "import { used } from './util'")
 
     const liveFiles = new Set(['/src/util.ts', '/src/main.ts'])
-    const dead = findDeadExports(project, liveFiles)
+    const dead = findDeadExports(project, liveFiles, '/')
 
     expect(dead.map((d) => d.exportName)).toContain('unused')
     expect(dead.map((d) => d.exportName)).not.toContain('used')
@@ -105,9 +105,23 @@ describe('findDeadExports', () => {
     project.createSourceFile('/src/main.ts', "import * as util from './util'")
 
     const liveFiles = new Set(['/src/util.ts', '/src/main.ts'])
-    const dead = findDeadExports(project, liveFiles)
+    const dead = findDeadExports(project, liveFiles, '/')
 
     // Both exports are covered by namespace import — neither is dead
     expect(dead.filter((d) => d.filePath === '/src/util.ts')).toHaveLength(0)
+  })
+
+  it('does not flag exports in Next.js pages as dead', () => {
+    const project = new Project({ useInMemoryFileSystem: true })
+    project.createSourceFile(
+      '/proj/src/pages/about.tsx',
+      'export default function Page() { return null }\nexport const x = 1\n',
+    )
+    project.createSourceFile('/proj/src/lib/ok.ts', "export const y = 1\n")
+
+    const liveFiles = new Set(['/proj/src/pages/about.tsx', '/proj/src/lib/ok.ts'])
+    const dead = findDeadExports(project, liveFiles, '/proj')
+
+    expect(dead.filter((d) => d.filePath.includes('pages'))).toHaveLength(0)
   })
 })

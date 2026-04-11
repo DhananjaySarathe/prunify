@@ -89,15 +89,22 @@ npx prunify --ci
 
 Summary
 
-┌─────────────────────────────┬───────┬──────────────────┐
-│ Check                       │ Found │ Output File      │
-├─────────────────────────────┼───────┼──────────────────┤
-│ Dead Code (files + exports) │ 7     │ dead-code.txt    │
-│ Circular Dependencies       │ 2     │ circular.txt     │
-│ Duplicate Clusters          │ 3     │ dupes.md         │
-│ Unused Packages             │ 4     │ deps.md          │
-│ Unused Assets               │ 5     │ assets.md        │
-└─────────────────────────────┴───────┴──────────────────┘
+========================================
+  DEAD CODE REPORT
+  Safe to delete     : 3
+  Transitively dead  : 1
+  Dead exports       : 3
+  Recoverable        : ~12.4 KB
+========================================
+
+┌───────────────────────────┬───────┬──────────────────┐
+│ Check                     │ Found │ Output File      │
+├───────────────────────────┼───────┼──────────────────┤
+│ Circular Dependencies     │ 2     │ circular.txt     │
+│ Duplicate Clusters        │ 3     │ dupes.md         │
+│ Unused Packages           │ 4     │ deps.md          │
+│ Unused Assets             │ 5     │ assets.md        │
+└───────────────────────────┴───────┴──────────────────┘
 ```
 
 ---
@@ -184,7 +191,7 @@ prunify builds a directed import graph (with `tsconfig.json` path aliases) and a
 
 1. **Safe to delete** — No other project file imports this file, and it is not treated as an app entry (e.g. Next.js `pages/` / `app/` routes) or a known framework/config file (`next.config.*`, `middleware.*`, `tailwind.config.*`, etc.).
 2. **Transitively dead** — The file is only imported by files that are already dead; removing the safe-to-delete roots would leave it orphaned.
-3. **Dead exports** — The file is still used, but specific named exports are never imported by name elsewhere (namespace imports count as “all exports used”).
+3. **Dead exports** — The file is still used, but specific named exports are never imported by name elsewhere (namespace imports count as “all exports used”). Files under **`pages/`** / **`src/pages/`**, route trees like **`src/routes/`**, **`src/views/`**, **`src/screens/`**, and Next.js App Router entry files (**`page.tsx`**, **`layout.tsx`**, **`route.ts`**, etc. under **`app/`** / **`src/app/`**) are **excluded** — the framework consumes those exports without normal `import` edges.
 
 **Why not “reachable from entry” only?** A pure reachability scan from entry points can mark heavily shared modules as dead if any link in the chain fails to resolve. The importer-based model matches the usual meaning of “nothing uses this file.”
 

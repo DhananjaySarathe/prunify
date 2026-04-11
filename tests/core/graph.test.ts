@@ -1,10 +1,44 @@
 import { describe, it, expect } from 'vitest'
+import path from 'node:path'
 import {
   buildGraph,
   runDFS,
   findDeadChains,
   detectCycles,
+  isConventionRoutedSourceFile,
 } from '@/core/graph.js'
+
+// ─── isConventionRoutedSourceFile ─────────────────────────────────────────────
+
+describe('isConventionRoutedSourceFile', () => {
+  const root = path.resolve('/repo')
+
+  it('treats src/pages as routed', () => {
+    expect(isConventionRoutedSourceFile(path.join(root, 'src/pages/index.tsx'), root)).toBe(true)
+  })
+
+  it('treats top-level pages as routed', () => {
+    expect(isConventionRoutedSourceFile(path.join(root, 'pages/_app.tsx'), root)).toBe(true)
+  })
+
+  it('treats app/page.tsx as routed', () => {
+    expect(isConventionRoutedSourceFile(path.join(root, 'src/app/dashboard/page.tsx'), root)).toBe(
+      true,
+    )
+  })
+
+  it('does not treat arbitrary modules under src/app as routed', () => {
+    expect(isConventionRoutedSourceFile(path.join(root, 'src/app/lib/helpers.ts'), root)).toBe(
+      false,
+    )
+  })
+
+  it('does not treat normal src files as routed', () => {
+    expect(isConventionRoutedSourceFile(path.join(root, 'src/components/Button.tsx'), root)).toBe(
+      false,
+    )
+  })
+})
 
 // ─── buildGraph ───────────────────────────────────────────────────────────────
 

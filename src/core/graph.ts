@@ -64,6 +64,99 @@ export function findEntryPoints(rootDir: string, packageJson: any): string[] {
   return [...new Set(entries)]
 }
 
+/** Next.js App Router files that are route/layout entries, not normal modules. */
+const APP_SPECIAL_ENTRY_BASENAMES_LOWER = new Set([
+  'page.tsx',
+  'page.ts',
+  'page.jsx',
+  'page.js',
+  'layout.tsx',
+  'layout.ts',
+  'layout.jsx',
+  'layout.js',
+  'template.tsx',
+  'template.ts',
+  'template.jsx',
+  'template.js',
+  'loading.tsx',
+  'loading.ts',
+  'loading.jsx',
+  'loading.js',
+  'error.tsx',
+  'error.ts',
+  'error.jsx',
+  'error.js',
+  'global-error.tsx',
+  'global-error.ts',
+  'global-error.jsx',
+  'global-error.js',
+  'not-found.tsx',
+  'not-found.ts',
+  'not-found.jsx',
+  'not-found.js',
+  'forbidden.tsx',
+  'forbidden.ts',
+  'forbidden.jsx',
+  'forbidden.js',
+  'unauthorized.tsx',
+  'unauthorized.ts',
+  'unauthorized.jsx',
+  'unauthorized.js',
+  'default.tsx',
+  'default.ts',
+  'default.jsx',
+  'default.js',
+  'route.ts',
+  'route.js',
+  'opengraph-image.tsx',
+  'opengraph-image.ts',
+  'opengraph-image.js',
+  'twitter-image.tsx',
+  'twitter-image.ts',
+  'twitter-image.js',
+  'icon.tsx',
+  'icon.ts',
+  'icon.jsx',
+  'icon.js',
+  'apple-icon.tsx',
+  'apple-icon.ts',
+  'apple-icon.js',
+  'sitemap.ts',
+  'sitemap.js',
+  'robots.ts',
+  'robots.js',
+  'manifest.ts',
+  'manifest.js',
+])
+
+/**
+ * Files loaded by the framework by file path or filename convention (routes,
+ * layouts, API handlers), not as normal imported modules. Omitted from
+ * "dead exports" analysis — their exports are consumed by the bundler/router.
+ */
+export function isConventionRoutedSourceFile(filePath: string, rootDir: string): boolean {
+  const rel = path.relative(rootDir, path.normalize(filePath)).replaceAll('\\', '/')
+  if (rel.startsWith('..')) return false
+
+  if (rel === 'pages' || rel.startsWith('pages/')) return true
+  if (rel.startsWith('src/pages/')) return true
+
+  if (
+    rel.startsWith('src/routes/') ||
+    rel.startsWith('src/views/') ||
+    rel.startsWith('src/screens/')
+  ) {
+    return true
+  }
+
+  if (rel.startsWith('app/') || rel.startsWith('src/app/')) {
+    const base = path.basename(rel).toLowerCase()
+    if (APP_SPECIAL_ENTRY_BASENAMES_LOWER.has(base)) return true
+  }
+
+  return false
+}
+
 /**
  * Returns files in the graph that are not imported by any other file —
  * i.e. natural roots of the dependency tree.
