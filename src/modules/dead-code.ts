@@ -9,6 +9,7 @@ import {
   buildGraph,
   findEntryPoints,
   buildReverseGraph,
+  isConventionRoutedSourceFile,
   type ImportGraph,
 } from '@/core/graph.js'
 import { writeJson, writeMarkdown } from '@/core/reporter.js'
@@ -128,7 +129,7 @@ export function runDeadCodeModule(
 
   // Dead exports from live files
   const liveFiles = new Set(allFiles.filter((f) => !deadSet.has(f)))
-  const deadExports = findDeadExports(project, liveFiles)
+  const deadExports = findDeadExports(project, liveFiles, rootDir)
 
   const report = buildDeadCodeReport(
     safeToDelete,
@@ -186,15 +187,22 @@ function collectTransitiveChain(
  *
  * Handles: named exports, re-exports, default exports.
  * Skips exports that are pulled in via a namespace import (`import * as X`).
+ *
+ * Skips framework boundary files (`next.config`, `middleware`, …) and
+ * convention-routed sources (`pages/`, `src/pages/`, App Router entry files,
+ * `src/routes/` …) — their exports are not meant to be imported like normal modules.
  */
 export function findDeadExports(
   project: Project,
   liveFiles: Set<string>,
+  rootDir: string,
 ): DeadExport[] {
   const importedNames = buildImportedNameMap(project, liveFiles)
   const dead: DeadExport[] = []
 
   for (const filePath of liveFiles) {
+    if (isFrameworkFile(filePath, rootDir)) continue
+    if (isConventionRoutedSourceFile(filePath, rootDir)) continue
     collectFileDeadExports(filePath, project, importedNames, dead)
   }
 
@@ -301,7 +309,7 @@ export function buildDeadCodeReport(
   if (deadExports.length > 0) {
     lines.push(
       '── DEAD EXPORTS ──',
-      '(Exported but never imported by any other file)',
+      '(Exported but never imported by any other file; pages/routes omitted)',
       '',
     )
     for (const entry of deadExports) {
