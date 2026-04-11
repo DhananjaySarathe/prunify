@@ -160,7 +160,8 @@ async function main(opts: CliOptions): Promise<void> {
 
     if (result.report) {
       deadReportFile = 'dead-code.txt'
-      writeReport(reportsDir, deadReportFile, result.report)
+      const banner = `prunify ${PKG_VERSION} — ${new Date().toISOString()}\n\n`
+      writeReport(reportsDir, deadReportFile, banner + result.report)
     }
   }
 
@@ -197,7 +198,8 @@ async function main(opts: CliOptions): Promise<void> {
         cycleLines.push(`  ↻ ${rel(cycle[0])}  (back to start)`)
         cycleLines.push('')
       }
-      writeReport(reportsDir, circularReportFile, cycleLines.join('\n'))
+      const banner = `prunify ${PKG_VERSION} — ${new Date().toISOString()}\n\n`
+      writeReport(reportsDir, circularReportFile, banner + cycleLines.join('\n'))
     }
   }
 
