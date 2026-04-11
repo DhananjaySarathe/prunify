@@ -29,7 +29,8 @@ export function parseDeadCodeReportContent(content: string, rootDir: string): st
 
   let section: 'none' | 'safe' | 'transitive' = 'none'
 
-  const fileLineRe = /^\s{2}(.+?)\s+\(~[\d.]+\s+KB\)\s*$/
+  // Matches: "  path  (~1.2 KB)" or "  • path  (~1.2 KB)"
+  const fileLineRe = /^\s*(?:•\s+)?(.+?)\s+\(~[\d.]+\s+KB\)\s*$/
 
   for (const line of lines) {
     if (line.includes('── SAFE TO DELETE ──')) {
@@ -52,7 +53,15 @@ export function parseDeadCodeReportContent(content: string, rootDir: string): st
     }
 
     if (section === 'safe' || section === 'transitive') {
-      if (line.includes('└─') || line.includes('also makes dead')) continue
+      if (
+        line.includes('└─') ||
+        line.includes('↳') ||
+        line.includes('also makes dead') ||
+        line.includes('SUBTOTAL') ||
+        line.includes('───')
+      ) {
+        continue
+      }
       const m = fileLineRe.exec(line)
       if (m) {
         const rel = m[1]!.trim()
@@ -79,6 +88,30 @@ export function countDeadExportsInReport(content: string): number {
     if (section && /\s→\s.+\[line \d+\]/.test(line)) n++
   }
   return n
+}
+
+export interface ParsedDeadCodeSummary {
+  safeToDelete: number
+  transitivelyDead: number
+  deadExports: number
+  recoverableDisplay: string
+}
+
+/**
+ * Reads counts from the DEAD CODE REPORT header inside `dead-code.txt`.
+ */
+export function parseDeadCodeReportSummary(content: string): ParsedDeadCodeSummary | null {
+  const safe = content.match(/Safe to delete\s*:\s*(\d+)/)
+  const trans = content.match(/Transitively dead\s*:\s*(\d+)/)
+  const exp = content.match(/Dead exports\s*:\s*(\d+)/)
+  const rec = content.match(/Recoverable[^:\n]*:\s*(~[\d.]+\s*KB)/i)
+  if (!safe || !trans || !exp) return null
+  return {
+    safeToDelete: Number(safe[1]),
+    transitivelyDead: Number(trans[1]),
+    deadExports: Number(exp[1]),
+    recoverableDisplay: rec ? rec[1]!.trim() : '~0.0 KB',
+  }
 }
 
 /**

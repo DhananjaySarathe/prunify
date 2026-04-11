@@ -4,7 +4,7 @@ import ora from 'ora'
 import chalk from 'chalk'
 import Table from 'cli-table3'
 import { glob } from '@/utils/file.js'
-import { writeMarkdown } from '@/core/reporter.js'
+import { writeMarkdown, formatBytes } from '@/core/reporter.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -188,34 +188,83 @@ function getFileSize(filePath: string): number {
   try { return fs.statSync(filePath).size } catch { return 0 }
 }
 
-function buildAssetReport(unused: UnusedAsset[], totalAssets: number, rootDir: string): string {
+export function buildAssetReport(unused: UnusedAsset[], totalAssets: number, rootDir: string): string {
   const totalBytes = unused.reduce((s, a) => s + a.sizeBytes, 0)
-  const totalKb = (totalBytes / 1024).toFixed(1)
+  const usedCount = totalAssets - unused.length
+  const pct =
+    totalAssets > 0 ? ((unused.length / totalAssets) * 100).toFixed(1) : '0.0'
+
+  const RULE2 = '═'.repeat(78)
+  const RULE = '─'.repeat(78)
 
   const lines: string[] = [
-    '========================================',
-    '  UNUSED ASSETS REPORT',
-    `  Total assets   : ${totalAssets}`,
-    `  Unused assets  : ${unused.length}`,
-    `  Recoverable    : ~${totalKb} KB`,
-    '========================================',
+    RULE2,
+    '  UNUSED ASSETS REPORT  (public/)',
+    RULE2,
+    `  Total files scanned : ${totalAssets}`,
+    `  Referenced in code  : ${usedCount}`,
+    `  Unused (listed)     : ${unused.length}  (${pct}% of scanned)`,
+    `  Disk size (unused)  : ${formatBytes(totalBytes)}`,
+    RULE2,
+    '',
+    '  HOW TO READ THIS',
+    '',
+    '  Files below live under public/ but their filename or public URL path was not',
+    '  found in your source scan (TS, JS, CSS, HTML, JSON). They may still be used',
+    '  if loaded by URL from a CMS, CDN, or runtime string — verify before deleting.',
+    '',
+    RULE,
     '',
   ]
 
   if (unused.length === 0) {
-    lines.push('  All public assets are referenced in source.', '')
+    lines.push(
+      '  No unused assets detected — everything scanned appears referenced.',
+      '',
+      RULE2,
+      '  END OF REPORT',
+      RULE2,
+      '',
+      '  If you removed nothing: disk savings = 0 (already optimal for this scan).',
+      '',
+      RULE2,
+      '',
+    )
     return lines.join('\n')
   }
 
-  lines.push('── UNUSED ASSETS ──', '')
-  for (const asset of unused) {
-    lines.push(
-      `UNUSED — ${asset.relativePath}`,
-      `Size: ~${(asset.sizeBytes / 1024).toFixed(1)} KB`,
-      `Action: Safe to delete if not served directly via URL`,
-      '',
-    )
+  const sorted = [...unused].sort((a, b) =>
+    a.relativePath.localeCompare(b.relativePath, 'en'),
+  )
+
+  lines.push('── UNUSED ASSET FILES ──', '', '  Sorted by path.', '')
+
+  for (const asset of sorted) {
+    const kb = (asset.sizeBytes / 1024).toFixed(1)
+    lines.push(`  • ${asset.relativePath}  (~${kb} KB)`)
+    lines.push(`      On disk: ${formatBytes(asset.sizeBytes)}`)
+    lines.push('')
   }
+
+  lines.push(
+    `  SUBTOTAL — ${sorted.length} file(s) · ${formatBytes(totalBytes)}`,
+    '',
+    RULE,
+    '',
+    RULE2,
+    '  END OF REPORT — DISK SPACE SUMMARY',
+    RULE2,
+    '',
+    '  If you DELETE every unused asset listed above from public/:',
+    '',
+    `      Files removed : ${sorted.length}`,
+    `      Disk freed    : ${formatBytes(totalBytes)}  (sum of file sizes on disk)`,
+    '',
+    '  This does not include savings from dead code — see dead-code.txt for source files.',
+    '',
+    RULE2,
+    '',
+  )
 
   return lines.join('\n')
 }

@@ -33,7 +33,7 @@ function readPkgVersion(): string {
 const PKG_VERSION = readPkgVersion()
 import { discoverFiles, buildProject, getImportsForFile } from '@/core/parser.js'
 import { buildGraph, findEntryPoints, detectCycles, type ImportGraph } from '@/core/graph.js'
-import { runDeadCodeModule } from '@/modules/dead-code.js'
+import { runDeadCodeModule, getFileSize } from '@/modules/dead-code.js'
 import { runDupeFinder } from '@/modules/dupe-finder.js'
 import { runDepCheck } from '@/modules/dep-check.js'
 import { runHealthReport } from '@/modules/health-report.js'
@@ -48,6 +48,7 @@ import {
   parseDeadCodeReportFile,
   parseAssetsReportFile,
   countDeadExportsInReport,
+  parseDeadCodeReportSummary,
 } from '@/core/report-parser.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -179,25 +180,38 @@ async function main(opts: CliOptions): Promise<void> {
 
   // ─── Run modules ─────────────────────────────────────────────────────────
 
-  let deadFileCount = 0
+  let deadSafeCount = 0
+  let deadTransitiveCount = 0
+  let deadExportsCount = 0
+  let deadRecoverDisplay = '~0.0 KB'
+
   let dupeCount = 0
   let unusedPkgCount = 0
   let circularCount = 0
   let unusedAssetCount = 0
 
-  let deadReportFile = ''
   let dupesReportFile = ''
   let depsReportFile = ''
   let circularReportFile = ''
   let assetsReportFile = ''
 
   if (loadDeadFromCache) {
-    deadReportFile = 'dead-code.txt'
     try {
       const raw = fs.readFileSync(deadReportPath, 'utf-8')
-      deadFileCount = deadFilePaths.length + countDeadExportsInReport(raw)
+      const parsed = parseDeadCodeReportSummary(raw)
+      if (parsed) {
+        deadSafeCount = parsed.safeToDelete
+        deadTransitiveCount = parsed.transitivelyDead
+        deadExportsCount = parsed.deadExports
+        deadRecoverDisplay = parsed.recoverableDisplay
+      } else {
+        deadExportsCount = countDeadExportsInReport(raw)
+        deadSafeCount = deadFilePaths.length
+        deadTransitiveCount = 0
+        deadRecoverDisplay = '—'
+      }
     } catch {
-      deadFileCount = deadFilePaths.length
+      deadSafeCount = deadFilePaths.length
     }
   }
 
@@ -209,8 +223,12 @@ async function main(opts: CliOptions): Promise<void> {
   if (runDeadCode) {
     const spinner = createSpinner(chalk.cyan('Analysing dead code…'))
     const result = runDeadCodeModule(project, graph, entryPoints, rootDir)
-    deadFileCount = result.safeToDelete.length + result.transitivelyDead.length + result.deadExports.length
     deadFilePaths = [...result.safeToDelete, ...result.transitivelyDead]
+    deadSafeCount = result.safeToDelete.length
+    deadTransitiveCount = result.transitivelyDead.length
+    deadExportsCount = result.deadExports.length
+    const recoverBytes = deadFilePaths.reduce((sum, f) => sum + getFileSize(f), 0)
+    deadRecoverDisplay = `~${(recoverBytes / 1024).toFixed(1)} KB`
     spinner.succeed(
       chalk.green(
         `Dead code analysis complete — ${result.safeToDelete.length} safe to delete, ` +
@@ -220,9 +238,8 @@ async function main(opts: CliOptions): Promise<void> {
     )
 
     if (result.report) {
-      deadReportFile = 'dead-code.txt'
       const banner = `prunify ${PKG_VERSION} — ${new Date().toISOString()}\n\n`
-      writeReport(reportsDir, deadReportFile, banner + result.report)
+      writeReport(reportsDir, 'dead-code.txt', banner + result.report)
     }
   }
 
@@ -290,21 +307,43 @@ async function main(opts: CliOptions): Promise<void> {
     console.log(chalk.cyan(`  HTML report written to ${htmlPath}`))
   }
 
-  // ─── Summary table ────────────────────────────────────────────────────────
+  // ─── Summary ──────────────────────────────────────────────────────────────
 
   console.log()
   console.log(chalk.bold('Summary'))
   console.log()
+
+  const fmt = (n: number) => (n > 0 ? chalk.yellow(String(n)) : chalk.green('0'))
+  const showDeadSummary =
+    modules.includes('dead-code') ||
+    Boolean(opts.delete) ||
+    loadDeadFromCache ||
+    runDeadCode
+
+  if (showDeadSummary) {
+    const recoverKb = parseFloat(deadRecoverDisplay.replace(/[^\d.]/g, '')) || 0
+    const recoverCh =
+      deadRecoverDisplay === '—'
+        ? chalk.dim('—')
+        : recoverKb > 0
+          ? chalk.yellow(deadRecoverDisplay)
+          : chalk.green(deadRecoverDisplay)
+    console.log(chalk.dim('========================================'))
+    console.log(chalk.dim('  DEAD CODE REPORT'))
+    console.log(chalk.dim('  Safe to delete     : ') + fmt(deadSafeCount))
+    console.log(chalk.dim('  Transitively dead  : ') + fmt(deadTransitiveCount))
+    console.log(chalk.dim('  Dead exports       : ') + fmt(deadExportsCount))
+    console.log(chalk.dim('  Recoverable        : ') + recoverCh)
+    console.log(chalk.dim('========================================'))
+    console.log()
+  }
 
   const table = new Table({
     head: [chalk.bold('Check'), chalk.bold('Found'), chalk.bold('Output File')],
     style: { head: [], border: [] },
   })
 
-  const fmt = (n: number) => (n > 0 ? chalk.yellow(String(n)) : chalk.green('0'))
-
   table.push(
-    ['Dead Code (files + exports)', fmt(deadFileCount), deadReportFile || '—'],
     ['Circular Dependencies', fmt(circularCount), circularReportFile || '—'],
     ['Duplicate Clusters', fmt(dupeCount), dupesReportFile || '—'],
     ['Unused Packages', fmt(unusedPkgCount), depsReportFile || '—'],
@@ -394,7 +433,13 @@ async function main(opts: CliOptions): Promise<void> {
   // ─── --ci ─────────────────────────────────────────────────────────────────
 
   if (opts.ci) {
-    const hasIssues = deadFileCount > 0 || dupeCount > 0 || unusedPkgCount > 0 || circularCount > 0 || unusedAssetCount > 0
+    const deadIssueCount = deadSafeCount + deadTransitiveCount + deadExportsCount
+    const hasIssues =
+      deadIssueCount > 0 ||
+      dupeCount > 0 ||
+      unusedPkgCount > 0 ||
+      circularCount > 0 ||
+      unusedAssetCount > 0
     if (hasIssues) process.exit(1)
   }
 }

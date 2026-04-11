@@ -89,15 +89,22 @@ npx prunify --ci
 
 Summary
 
-┌─────────────────────────────┬───────┬──────────────────┐
-│ Check                       │ Found │ Output File      │
-├─────────────────────────────┼───────┼──────────────────┤
-│ Dead Code (files + exports) │ 7     │ dead-code.txt    │
-│ Circular Dependencies       │ 2     │ circular.txt     │
-│ Duplicate Clusters          │ 3     │ dupes.md         │
-│ Unused Packages             │ 4     │ deps.md          │
-│ Unused Assets               │ 5     │ assets.md        │
-└─────────────────────────────┴───────┴──────────────────┘
+========================================
+  DEAD CODE REPORT
+  Safe to delete     : 3
+  Transitively dead  : 1
+  Dead exports       : 3
+  Recoverable        : ~12.4 KB
+========================================
+
+┌───────────────────────────┬───────┬──────────────────┐
+│ Check                     │ Found │ Output File      │
+├───────────────────────────┼───────┼──────────────────┤
+│ Circular Dependencies     │ 2     │ circular.txt     │
+│ Duplicate Clusters        │ 3     │ dupes.md         │
+│ Unused Packages           │ 4     │ deps.md          │
+│ Unused Assets             │ 5     │ assets.md        │
+└───────────────────────────┴───────┴──────────────────┘
 ```
 
 ---
