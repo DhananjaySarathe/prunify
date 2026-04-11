@@ -44,6 +44,7 @@ import {
   appendToGitignore,
   writeReport,
 } from '@/core/reporter.js'
+import { buildAiPromptTsx } from '@/core/agent-prompt.js'
 import {
   parseDeadCodeReportFile,
   parseAssetsReportFile,
@@ -352,6 +353,17 @@ async function main(opts: CliOptions): Promise<void> {
   )
 
   console.log(table.toString())
+  console.log()
+
+  const aiPromptContent = buildAiPromptTsx({
+    prunifyVersion: PKG_VERSION,
+    generatedAtIso: new Date().toISOString(),
+    projectRootDisplay: path.relative(process.cwd(), rootDir) || '.',
+    reportsDirDisplay: path.relative(rootDir, reportsDir).replaceAll('\\', '/') || 'prunify-reports',
+  })
+  const aiPromptPath = path.join(reportsDir, 'ai_prompt.tsx')
+  fs.writeFileSync(aiPromptPath, aiPromptContent, 'utf-8')
+  console.log(chalk.cyan(`  Agent prompt saved → ${aiPromptPath}`))
   console.log()
 
   // ─── --delete (dead code files only) ─────────────────────────────────────

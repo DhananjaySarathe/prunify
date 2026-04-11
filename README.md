@@ -175,6 +175,7 @@ All reports are written to `prunify-reports/` (auto-added to `.gitignore`).
 
 | File | Contents |
 |------|----------|
+| `ai_prompt.tsx` | **Agent handoff:** exports `PRUNIFY_CLEANUP_AGENT_PROMPT` — paste into Cursor/Copilot with the other reports attached; includes safety rules and cleanup order. Regenerated every run. |
 | `dead-code.txt` | Header with tool version + time, then **Safe to delete**, **Transitively dead**, and **Dead exports** sections (sizes and optional chains). Used by `--delete` when re-running deletes. |
 | `dupes.md` | Duplicate function clusters with AI-ready refactor prompts |
 | `circular.txt` | Circular dependency chains (relative paths; header with tool version + time) |
