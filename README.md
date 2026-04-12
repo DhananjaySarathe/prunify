@@ -2,291 +2,234 @@
 
 # 🧹 prunify
 
-**npm run clean. ship with confidence.**
+**One command. See what to delete, dedupe, and fix—before it ships.**
 
 [![npm version](https://img.shields.io/npm/v/prunify.svg?style=flat-square)](https://www.npmjs.com/package/prunify)
 [![npm downloads](https://img.shields.io/npm/dw/prunify.svg?style=flat-square)](https://www.npmjs.com/package/prunify)
 [![Node.js ≥ 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen?style=flat-square)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-ready-blue?style=flat-square)](https://www.typescriptlang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
 </div>
 
 ---
 
-**prunify** is a zero-config CLI that audits TypeScript and JavaScript codebases for dead code, duplicate logic, circular imports, unused dependencies, and unused public assets — then gives you a single health score so you know exactly where to clean up.
+## The cleanup debt TypeScript won’t warn you about
 
-> **Add a demo GIF here** — record your terminal with [Terminalizer](https://github.com/faressoft/terminalizer) or [asciinema](https://asciinema.org) and drop the `.gif` in `.github/assets/demo.gif`
-
-```
-![prunify demo](.github/assets/demo.gif)
-```
+Your repo grew. Dead files, barrel re-exports nobody uses, duplicate 20-line blocks, `public/` junk, and `dependencies` you forgot about—**none of that shows up in TypeScript errors until it hurts.**  
+**prunify** runs in seconds, writes reports under `prunify-reports/`, and optional **HTML + Cursor-ready prompts** so you actually clean up.
 
 ---
 
-## What it detects
+## What prunify does
 
-| Module | What it finds |
-|--------|---------------|
-| 🗑️ **Dead code** | **Safe to delete** (nothing imports them), **transitively dead** (only dead files import them), and **dead exports** (live files with unused named exports) |
-| 🔁 **Duplicate code** | Functions with identical bodies, suspiciously similar names, and duplicate constants |
-| ♻️ **Circular imports** | Dependency cycles that can cause runtime bugs and bundler issues |
-| 📦 **Unused dependencies** | Packages declared in `package.json` that are never actually imported |
-| 🖼️ **Unused assets** | Images, fonts, videos and other files in `public/` that are never referenced in source |
-| 📊 **Health score** | A 0–100 score summarising all findings, with optional HTML gauge output |
+Zero-config CLI: point it at a folder with `package.json`. It parses TS/JS, builds an import graph, and tells you **what’s unused, duplicated, circular, or lying in `package.json` / `public/`**—with file paths and sizes, not vague warnings.
 
 ---
 
-## Installation
+## Who it’s for
+
+| You are… | You get… |
+|----------|-----------|
+| **Solo / shipping fast** | A checklist: delete candidates, dead exports, dupes to merge |
+| **On a team** | Same reports in CI (`--ci` exits 1 if anything’s found) |
+| **Using Cursor / Copilot** | `ai_prompt.tsx` + reports = one paste to drive a safe cleanup pass |
+| **On Next.js / Vite / plain TS** | Auto entry detection (`app/`, `pages/`, `src/main`, etc.) |
+
+**Pain it kills:** “We’re afraid to delete anything” / “We don’t know what’s safe” / “deps and assets drift forever.”
+
+---
+
+## Sample run: input and output
+
+From your project root:
 
 ```bash
-# Run directly (no install needed)
 npx prunify
-
-# Or install globally
-npm install -g prunify
 ```
 
----
+Abbreviated output:
 
-## Quick Start
-
-```bash
-# Analyse the current directory
-npx prunify
-
-# Analyse a specific project
-npx prunify --dir ./my-app
-
-# Run only specific checks
-npx prunify --only dead-code,circular
-
-# Override the entry point
-npx prunify --entry src/main.tsx
-
-# Generate an HTML report with health gauge
-npx prunify --html
-
-# CI mode — exits with code 1 if any issues found
-npx prunify --ci
-```
-
----
-
-## Sample Output
-
-```
+```text
 🧹 prunify — npm run clean. ship with confidence.
 
 ✔ Parsed codebase — 142 file(s) found
 ✔ Import graph built — 389 edge(s)
-
-✔ Dead code analysis complete — 3 safe to delete, 1 transitively dead, 3 dead export(s)
+✔ Dead code analysis complete — 3 safe to delete, 1 transitively dead, 12 dead export(s)
 ✔ Duplicate scan complete — 3 duplicate block(s) found
 ✔ Circular import analysis complete — 2 cycle(s) found
 ✔ Dependency audit complete — 4 issue(s) found
 ✔ Asset scan complete — 5 unused / 23 total
 
-Summary
-
 ========================================
   DEAD CODE REPORT
   Safe to delete     : 3
   Transitively dead  : 1
-  Dead exports       : 3
+  Dead exports       : 12
   Recoverable        : ~12.4 KB
 ========================================
 
-┌───────────────────────────┬───────┬──────────────────┐
-│ Check                     │ Found │ Output File      │
-├───────────────────────────┼───────┼──────────────────┤
-│ Circular Dependencies     │ 2     │ circular.txt     │
-│ Duplicate Clusters        │ 3     │ dupes.md         │
-│ Unused Packages           │ 4     │ deps.md          │
-│ Unused Assets             │ 5     │ assets.md        │
-└───────────────────────────┴───────┴──────────────────┘
+┌───────────────────────────┬───────┬──────────────────────────┐
+│ Check                     │ Found │ Output File              │
+├───────────────────────────┼───────┼──────────────────────────┤
+│ Circular Dependencies     │ 2     │ circular.txt             │
+│ Duplicate Clusters        │ 3     │ dupes.md                 │
+│ Unused Packages           │ 4     │ deps.md                  │
+│ Unused Assets             │ 5     │ assets.md, assets.txt    │
+└───────────────────────────┴───────┴──────────────────────────┘
+
+  Agent prompt saved → …/prunify-reports/ai_prompt.tsx
 ```
+
+Reports land in **`prunify-reports/`** (auto-suggested for `.gitignore`).
+
+> **Optional:** add a terminal recording as `.github/assets/demo.gif` for newcomers.
 
 ---
 
-## CLI Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--dir <path>` | `cwd` | Root directory to analyse. Must contain a `package.json`. |
-| `--entry <path>` | auto-detected | Override the entry point (e.g. `src/main.tsx`). prunify auto-detects `pages/`, `app/`, `src/index`, `src/main`, `src/App`, and common root entries. |
-| `--only <modules>` | all | Comma-separated modules to run: `dead-code`, `dupes`, `circular`, `deps`, `assets`, `health`. |
-| `--ignore <pattern>` | — | Glob pattern to exclude from analysis. Repeatable. |
-| `--out <path>` | `<dir>/prunify-reports/` | Directory to write report files to. |
-| `--html` | `false` | Generate `code_health.html` — a self-contained page with an SVG score gauge. |
-| `--delete` | `false` | Prompt to permanently delete dead **code files** (safe to delete + transitively dead — not dead exports). See **Delete commands & cached reports** below. |
-| `--delete-assets` | `false` | Prompt to delete unused files under `public/` from the asset report. Only paths inside `public/` are removed. See **Delete commands & cached reports** below. |
-| `--ci` | `false` | Non-interactive mode. Exits `1` if any issues are found. With `--delete` / `--delete-assets`, does not prompt and does **not** delete files. |
-| `-v, --version` | — | Print the installed version. |
-
-### Delete commands & cached reports
-
-When you use **`--delete`** or **`--delete-assets`**, prunify prefers your last report so you do not have to re-scan the whole repo every time:
-
-| Flag | If the report already exists | If the report is missing |
-|------|------------------------------|---------------------------|
-| **`--delete`** | Reads file paths from `prunify-reports/dead-code.txt` (skips dead-code analysis and may skip building the import graph when no other module needs it). | Runs dead-code analysis, writes `dead-code.txt`, then prompts to delete. |
-| **`--delete-assets`** | Reads paths from `prunify-reports/assets.md` (skips the asset scan). | Runs the asset scan, writes `assets.md`, then prompts to delete. |
-
-- **`dead-code.txt`** starts with a line like `prunify <version> — <ISO timestamp>` so you know which run produced it.
-- Keep your dependency on prunify up to date (e.g. `"prunify": "^0.1.5"` in `devDependencies`) so you get the latest detection logic; pinning an old exact version will not pick up fixes from npm.
-
-### More examples
+## Install
 
 ```bash
-# Ignore test fixtures and generated files
-npx prunify --ignore "tests/fixtures/**" --ignore "src/generated/**"
+# Try once — no install
+npx prunify
 
-# Write reports to a custom folder
-npx prunify --out ./reports
+# Or global
+npm install -g prunify
 
-# Full health report as HTML
-npx prunify --only health --html
+# Or pin in the repo you’re cleaning
+npm install -D prunify
+```
 
-# Only check unused public assets
-npx prunify --only assets
+**Requires Node.js ≥ 18.**
 
-# First run: analyse + write reports, then prompt to delete dead code files
-npx prunify --delete
+---
 
-# Later: delete from existing dead-code.txt only (no graph build if e.g. --only deps)
-npx prunify --only deps --delete
+## CLI reference
 
-# Unused public assets: scan + prompt to delete
-npx prunify --only assets --delete-assets
+```bash
+# Default: all checks + reports
+npx prunify
 
-# Reuse assets.md only (no asset scan)
-npx prunify --delete-assets
+# Another repo
+npx prunify --dir ./my-app
 
-# Strict CI gate — fails the build if any issues exist
+# Only what you care about
+npx prunify --only dead-code,circular
+
+# Custom entry (otherwise auto-detected)
+npx prunify --entry src/main.tsx
+
+# HTML health page
+npx prunify --html
+
+# CI: fail if any issues
 npx prunify --ci
+
+# Ignore paths (repeatable)
+npx prunify --ignore "tests/fixtures/**" --ignore "src/generated/**"
 ```
 
----
+**Interactive deletes** (uses last report when present—no full rescan needed):
 
-## Report Files
-
-All reports are written to `prunify-reports/` (auto-added to `.gitignore`).
-
-| File | Contents |
-|------|----------|
-| `ai_prompt.tsx` | **Agent handoff:** exports `PRUNIFY_CLEANUP_AGENT_PROMPT` — paste into Cursor/Copilot with the other reports attached; includes safety rules and cleanup order. Regenerated every run. |
-| `dead-code.txt` | Header with tool version + time, then **Safe to delete**, **Transitively dead**, and **Dead exports** sections (sizes and optional chains). Used by `--delete` when re-running deletes. |
-| `dupes.md` | Duplicate function clusters with AI-ready refactor prompts |
-| `circular.txt` | Circular dependency chains (relative paths; header with tool version + time) |
-| `deps.md` | Unused packages |
-| `assets.md` | Unused files found in `public/` with sizes (Markdown table). Used by `--delete-assets` when re-running deletes. |
-| `health-report.md` | Combined report with health score (with `--only health`) |
-| `code_health.html` | Self-contained HTML page with SVG score gauge (with `--html`) |
-
----
-
-## How Dead Code Detection Works
-
-prunify builds a directed import graph (with `tsconfig.json` path aliases) and a **reverse** map of “who imports this file”.
-
-1. **Safe to delete** — No other project file imports this file, and it is not treated as an app entry (e.g. Next.js `pages/` / `app/` routes) or a known framework/config file (`next.config.*`, `middleware.*`, `tailwind.config.*`, etc.).
-2. **Transitively dead** — The file is only imported by files that are already dead; removing the safe-to-delete roots would leave it orphaned.
-3. **Dead exports** — The file is still used, but specific named exports are never imported by name elsewhere (namespace imports count as “all exports used”). Files under **`pages/`** / **`src/pages/`**, route trees like **`src/routes/`**, **`src/views/`**, **`src/screens/`**, and Next.js App Router entry files (**`page.tsx`**, **`layout.tsx`**, **`route.ts`**, etc. under **`app/`** / **`src/app/`**) are **excluded** — the framework consumes those exports without normal `import` edges.
-
-**Why not “reachable from entry” only?** A pure reachability scan from entry points can mark heavily shared modules as dead if any link in the chain fails to resolve. The importer-based model matches the usual meaning of “nothing uses this file.”
-
-**Circular imports** are reported separately in `circular.txt`; they are not lumped into “safe to delete.”
-
----
-
-## How the Health Score Works
-
-Starting from **100**, points are deducted per finding:
-
-| Finding | Deduction | Cap |
-|---------|-----------|-----|
-| Dead file | −2 | −20 |
-| Duplicate function cluster | −3 | −15 |
-| Circular dependency | −5 | −20 |
-| Unused package | −2 | −10 |
-| Barrel file (≥ 15 exports) | −1 | −10 |
-| Long file (> 300 lines) | −1 | −10 |
-
-| Score | Grade |
-|-------|-------|
-| ≥ 80 | 🟢 Good |
-| 50–79 | 🟡 Fair |
-| < 50 | 🔴 Poor |
-
----
-
-## How Asset Detection Works
-
-prunify scans your `public/` folder for image, font, video, and document files (`.png`, `.jpg`, `.svg`, `.webp`, `.woff2`, `.ttf`, `.mp4`, `.pdf`, and more).
-
-For each asset it checks whether the filename or its public-root-relative path (e.g. `/icons/logo.svg`) appears anywhere in your source files — including TS, JS, CSS, SCSS, HTML, and JSON. Assets not referenced anywhere are flagged as unused.
-
-> **Note:** Assets served via a CDN or referenced only at runtime (e.g. dynamically constructed URLs) may appear as unused. Review the report before deleting.
-
----
-
-## Requirements
-
-- **Node.js ≥ 18**
-- Works with **TypeScript and JavaScript** projects
-- Reads `tsconfig.json` automatically for path-alias resolution (`@/`, `~`, etc.)
-- No config file needed
-
----
-
-## Project Structure
-
+```bash
+npx prunify --delete              # dead code files from dead-code.txt
+npx prunify --delete-assets       # unused files under public/
 ```
-src/
-├── cli.ts                  # Entry point & CLI flag handling
-├── core/
-│   ├── parser.ts           # File discovery + ts-morph AST parsing
-│   ├── graph.ts            # Import graph builder, cycle detection, reverse graph
-│   ├── report-parser.ts    # Parse dead-code.txt / assets.md for --delete / --delete-assets
-│   └── reporter.ts         # Markdown / JSON / HTML output writer
-├── modules/
-│   ├── dead-code.ts        # Dead file + dead export detection
-│   ├── dupe-finder.ts      # Duplicate function + constant detection
-│   ├── circular.ts         # Circular import detection
-│   ├── dep-check.ts        # package.json dependency audit
-│   ├── assets.ts           # Unused public asset detection
-│   └── health-report.ts    # Health score + combined report
-├── prompt-gen/
-│   └── templates.ts        # AI prompt generators for refactor suggestions
-└── utils/
-    ├── file.ts             # Glob helpers
-    └── ast.ts              # ts-morph AST helpers
-```
+
+With **`--ci`**, `--delete` / `--delete-assets` **do not delete** (non-interactive).
+
+| Flag | What it does |
+|------|----------------|
+| `--dir <path>` | Project root (must have `package.json`) |
+| `--entry <path>` | Override entry file |
+| `--only` | `dead-code`, `dupes`, `circular`, `deps`, `assets`, `health` (comma-separated) |
+| `--ignore <glob>` | Exclude from analysis (repeatable) |
+| `--out <path>` | Parent folder for `prunify-reports/` |
+| `--html` | Writes `code_health.html` |
+| `--delete` / `--delete-assets` | Prompted deletes (see table above) |
+| `--ci` | Exit `1` if issues; no delete prompts |
+
+---
+
+## Reports and checks
+
+- **Dead code** — Orphan files (safe + transitive chains), plus **dead exports** in still-imported modules  
+- **Duplicates** — Same multi-line blocks across files → `dupes.md` with refactor-friendly context  
+- **Circular imports** — Cycles as paths you can fix, not buried in bundler noise  
+- **Dependencies** — `package.json` vs what `src/` imports (`deps.md`)  
+- **Public assets** — Unreferenced files under `public/` (`assets.md` + readable `assets.txt`)  
+- **Health score** — Optional combined report + HTML gauge  
+- **Agent handoff** — `ai_prompt.tsx` exports a prompt + safety rules for AI-assisted cleanup  
+
+Reads **`tsconfig.json`** path aliases. No config file required.
+
+### Output files (`prunify-reports/`)
+
+| File | Purpose |
+|------|---------|
+| `ai_prompt.tsx` | Paste-friendly agent prompt + guardrails |
+| `dead-code.txt` | Safe / transitive / dead exports + sizes (`--delete`) |
+| `circular.txt` | Import cycles |
+| `dupes.md` | Duplicate blocks |
+| `deps.md` | Unused / missing deps (from `src/` scan) |
+| `assets.md` / `assets.txt` | Unused `public/` files |
+| `health-report.md` | Combined health (`--only health`) |
+| `code_health.html` | Visual gauge (`--html`) |
+
+<details>
+<summary><strong>How dead code is classified (click to expand)</strong></summary>
+
+- **Safe to delete** — No in-repo importer; not an entry or ignored framework file (`next.config.*`, `middleware.*`, etc.).  
+- **Transitively dead** — Only imported by files that are already dead.  
+- **Dead exports** — File is still imported, but a named export isn’t used elsewhere (framework route files excluded where exports aren’t normal imports).
+
+Circular files are **not** auto-marked as “safe to delete.”
+
+</details>
+
+---
+
+## Typical workflows
+
+- **Pre-release / quarterly cleanup** — Run once, triage `dead-code.txt` and `deps.md`  
+- **After a big refactor** — Find barrels and exports that nothing imports anymore  
+- **Onboarding a legacy app** — `circular.txt` + `dupes.md` show structural debt fast  
+- **Shrinking deploy / disk** — Unused `public/` assets and removable files with size hints  
+- **CI hygiene** — `npx prunify --ci` on PRs so debt doesn’t creep back silently  
+
+---
+
+## Compared to doing it by hand
+
+| Approach | prunify |
+|----------|---------|
+| **Manual grep** | Misses graph edges, barrels, transitive orphans |
+| **“Delete unused” in IDE only** | Often file-local; won’t give you `public/` or `package.json` drift |
+| **Heavy enterprise suites** | prunify is one npm binary, seconds on typical apps, reports you can grep or feed to an agent |
+
+**Caveats (honest):** `deps.md` scans **`src/`** imports—packages used only in root config, scripts, or non-`src` files need a manual check. Assets referenced only via runtime-built URLs can look “unused.” **Always review** before `--delete`.
 
 ---
 
 ## Contributing
 
-Contributions are welcome! Here's how to get started:
-
 ```bash
 git clone https://github.com/DhananjaySarathe/prunify.git
 cd prunify
 npm install
-
-npm test          # run the test suite
-npm run build     # compile to dist/
-npm run dev       # watch mode
+npm test
+npm run build
 ```
 
-### Adding a new module
+Issues and PRs: [github.com/DhananjaySarathe/prunify](https://github.com/DhananjaySarathe/prunify).
 
-1. Create `src/modules/your-module.ts` — export a `run*Module(...)` (sync) and `run*(...)` (async CLI) function
-2. Wire it into `src/cli.ts` — add to the `Module` type, `ALL_MODULES`, and the run block
-3. Add tests in `tests/modules/your-module.test.ts`
+For larger features, open an issue first.
 
-Please open an issue first for large changes so we can discuss the approach.
+---
+
+## Feedback and stars
+
+If **prunify** saved you time, **[star the repo](https://github.com/DhananjaySarathe/prunify)**—it helps others find it.  
+Bugs / ideas: [Issues](https://github.com/DhananjaySarathe/prunify/issues).
 
 ---
 
