@@ -71,6 +71,27 @@ describe('runDeadCodeModule (fixture)', () => {
     expect(relLive).toContain('src/index.ts')
   })
 
+  it('keeps exports used through import() and aliased imports, and still flags the rest', () => {
+    const dir = path.resolve('tests/fixtures/dynamic-import-project')
+    const files = discoverFiles(dir, [])
+    const project = buildProject(files)
+    const graph = buildGraph(files, (f) => {
+      const sf = project.getSourceFile(f)
+      return sf ? getImportsForFile(sf) : []
+    })
+
+    const indexFile = files.find((f) => f.endsWith('index.ts'))!
+    const result = runDeadCodeModule(project, graph, [indexFile], dir)
+
+    const rel = (f: string) => path.relative(dir, f).replace(/\\/g, '/')
+    expect(result.deadFiles).toEqual([])
+    expect(result.deadExports.map((e) => `${rel(e.filePath)}#${e.exportName}`).sort()).toEqual([
+      'src/aliased.ts#unusedAliasTarget',
+      'src/destructured.ts#unusedDestructured',
+      'src/picked.ts#unusedPicked',
+    ])
+  })
+
   it('returns a non-empty report string', () => {
     const files = discoverFiles(FIXTURE_DIR, [])
     const project = buildProject(files)
@@ -123,5 +144,76 @@ describe('findDeadExports', () => {
     const dead = findDeadExports(project, liveFiles, '/proj')
 
     expect(dead.filter((d) => d.filePath.includes('pages'))).toHaveLength(0)
+  })
+})
+
+// ─── findDeadExports: dynamic import() and aliased imports ───────────────────
+
+/** Dead export names in /src/util.ts when /src/main.ts is the only other live file. */
+function deadInUtil(util: string, main: string): string[] {
+  const project = new Project({ useInMemoryFileSystem: true })
+  project.createSourceFile('/src/util.ts', util)
+  project.createSourceFile('/src/main.ts', main)
+
+  const dead = findDeadExports(project, new Set(['/src/util.ts', '/src/main.ts']), '/')
+  return dead
+    .filter((d) => d.filePath === '/src/util.ts')
+    .map((d) => d.exportName)
+    .sort()
+}
+
+describe('findDeadExports with dynamic import()', () => {
+  const UTIL = 'export function used() {}\nexport function unused() {}\n'
+
+  it('counts every export as used when the module itself is handed on (React.lazy, next/dynamic)', () => {
+    expect(deadInUtil(UTIL, "export const Lazy = lazy(() => import('./util'))\n")).toEqual([])
+    expect(deadInUtil(UTIL, "export const loader = import('./util')\n")).toEqual([])
+  })
+
+  it('reads the export picked in a .then() callback', () => {
+    expect(
+      deadInUtil(UTIL, "export const Palette = dynamic(() => import('./util').then((mod) => mod.used))\n"),
+    ).toEqual(['unused'])
+    expect(deadInUtil(UTIL, "import('./util').then(function (m) { return m['used'] })\n")).toEqual(['unused'])
+  })
+
+  it('reads exports destructured in a .then() callback', () => {
+    expect(deadInUtil(UTIL, "import('./util').then(({ used: run }) => run())\n")).toEqual(['unused'])
+  })
+
+  it('reads exports destructured from an awaited import', () => {
+    expect(deadInUtil(UTIL, "const { used } = await import('./util')\nused()\n")).toEqual(['unused'])
+  })
+
+  it('reads a property taken straight off an awaited import', () => {
+    expect(deadInUtil(UTIL, "(await import('./util')).used()\n")).toEqual(['unused'])
+    expect(deadInUtil(UTIL, "export {}\nawait (await import('./util'))['used']()\n")).toEqual(['unused'])
+  })
+
+  it('reads properties used on a variable that holds the module', () => {
+    expect(deadInUtil(UTIL, "const util = await import('./util')\nutil.used()\n")).toEqual(['unused'])
+  })
+
+  it('counts every export as used when it cannot tell which ones are read', () => {
+    expect(deadInUtil(UTIL, "const util = await import('./util')\nconsole.log(util)\n")).toEqual([])
+    expect(deadInUtil(UTIL, "import('./util').then(register)\n")).toEqual([])
+    expect(deadInUtil(UTIL, "import('./util').then(({ ...all }) => all)\n")).toEqual([])
+    expect(deadInUtil(UTIL, "import('./util').then((m) => Object.keys(m))\n")).toEqual([])
+  })
+
+  it('ignores import() of packages and unresolvable paths', () => {
+    expect(deadInUtil(UTIL, "import('chalk')\nimport('./missing')\n")).toEqual(['unused', 'used'])
+  })
+})
+
+describe('findDeadExports with aliased imports', () => {
+  it('records the exported name, not the local alias', () => {
+    const util = 'export function used() {}\nexport function unused() {}\n'
+    expect(deadInUtil(util, "import { used as renamed } from './util'\nrenamed()\n")).toEqual(['unused'])
+  })
+
+  it('treats `default as X` as a use of the default export', () => {
+    const util = 'export default function main() {}\nexport const other = 1\n'
+    expect(deadInUtil(util, "import { default as main } from './util'\nmain()\n")).toEqual(['other'])
   })
 })

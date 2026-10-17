@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { Project, SourceFile, Node, SyntaxKind } from 'ts-morph'
+import { Project, SourceFile, Node, SyntaxKind, type CallExpression } from 'ts-morph'
 import { glob } from '@/utils/file.js'
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -108,11 +108,6 @@ export function buildProject(files: string[], tsconfigPath?: string): Project {
  */
 export function getImportsForFile(sourceFile: SourceFile): string[] {
   const result = new Set<string>()
-  const fileDir = path.dirname(sourceFile.getFilePath())
-  const project = sourceFile.getProject()
-  const compilerOptions = project.getCompilerOptions()
-  const pathAliases = (compilerOptions.paths ?? {}) as Record<string, string[]>
-  const baseUrl = compilerOptions.baseUrl
 
   function addResolved(sf: SourceFile | undefined): void {
     if (!sf) return
@@ -127,16 +122,8 @@ export function getImportsForFile(sourceFile: SourceFile): string[] {
   }
 
   function resolveAndAdd(specifier: string): void {
-    if (!specifier) return
-    const isRelative = specifier.startsWith('./') || specifier.startsWith('../')
-
-    if (isRelative) {
-      const p = resolveRelativePath(fileDir, specifier, project)
-      if (p) result.add(p)
-    } else if (!specifier.startsWith('node:')) {
-      const p = resolvePathAlias(specifier, pathAliases, baseUrl, project)
-      if (p) result.add(p)
-    }
+    const p = resolveLocalImport(sourceFile, specifier)
+    if (p) result.add(p)
   }
 
   // 1. Static import declarations
@@ -154,15 +141,51 @@ export function getImportsForFile(sourceFile: SourceFile): string[] {
   }
 
   // 3. Dynamic imports: import('...')
-  for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-    if (call.getExpression().getKind() !== SyntaxKind.ImportKeyword) continue
-    const args = call.getArguments()
-    if (args.length > 0 && Node.isStringLiteral(args[0])) {
-      resolveAndAdd(args[0].getLiteralValue())
-    }
+  for (const { specifier } of getDynamicImportCalls(sourceFile)) {
+    resolveAndAdd(specifier)
   }
 
   return [...result]
+}
+
+/**
+ * Every `import('...')` call in `sourceFile` whose specifier is a plain string
+ * literal, with that specifier. Calls with computed specifiers are skipped.
+ */
+export function getDynamicImportCalls(
+  sourceFile: SourceFile,
+): { call: CallExpression; specifier: string }[] {
+  const calls: { call: CallExpression; specifier: string }[] = []
+  for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    if (call.getExpression().getKind() !== SyntaxKind.ImportKeyword) continue
+    const [arg] = call.getArguments()
+    if (arg && Node.isStringLiteral(arg)) {
+      calls.push({ call, specifier: arg.getLiteralValue() })
+    }
+  }
+  return calls
+}
+
+/**
+ * Resolves `specifier`, as written in `sourceFile`, to the absolute path of a
+ * project file: relative paths and tsconfig path aliases, trying every source
+ * extension and index file. Returns null for packages, `node:` builtins and
+ * anything that does not resolve.
+ *
+ * This is how the import graph resolves specifiers TypeScript does not resolve
+ * for us, such as dynamic imports.
+ */
+export function resolveLocalImport(sourceFile: SourceFile, specifier: string): string | null {
+  if (!specifier) return null
+  const project = sourceFile.getProject()
+
+  if (specifier.startsWith('./') || specifier.startsWith('../')) {
+    return resolveRelativePath(path.dirname(sourceFile.getFilePath()), specifier, project)
+  }
+  if (specifier.startsWith('node:')) return null
+
+  const { paths, baseUrl } = project.getCompilerOptions()
+  return resolvePathAlias(specifier, (paths ?? {}) as Record<string, string[]>, baseUrl, project)
 }
 
 // ─── Legacy helpers (used by other modules) ───────────────────────────────────

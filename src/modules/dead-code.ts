@@ -3,8 +3,14 @@ import chalk from 'chalk'
 import Table from 'cli-table3'
 import fs from 'node:fs'
 import path from 'node:path'
-import { Project, Node } from 'ts-morph'
-import { discoverFiles, buildProject, getImportsForFile } from '@/core/parser.js'
+import { Project, Node, type CallExpression, type Identifier } from 'ts-morph'
+import {
+  discoverFiles,
+  buildProject,
+  getImportsForFile,
+  getDynamicImportCalls,
+  resolveLocalImport,
+} from '@/core/parser.js'
 import {
   buildGraph,
   findEntryPoints,
@@ -187,6 +193,9 @@ function collectTransitiveChain(
  *
  * Handles: named exports, re-exports, default exports.
  * Skips exports that are pulled in via a namespace import (`import * as X`).
+ * A dynamic `import('./x')` uses the exports the code reads from it; when that
+ * can't be traced (the module is returned, stored or passed on, as with
+ * `React.lazy` or `next/dynamic`), it counts like a namespace import.
  *
  * Skips framework boundary files (`next.config`, `middleware`, …) and
  * convention-routed sources (`pages/`, `src/pages/`, App Router entry files,
@@ -348,8 +357,9 @@ export function buildDeadCodeReport(
     lines.push(
       '── DEAD EXPORTS ──',
       '',
-      '  Symbol is exported but never imported by name elsewhere (namespace imports',
-      '  count as “all used”). Route and framework files are excluded.',
+      '  Symbol is exported but never imported by name elsewhere (namespace imports,',
+      '  and import() calls whose use can’t be traced, count as “all used”).',
+      '  Route and framework files are excluded.',
       '',
     )
     const byFile = new Map<string, DeadExport[]>()
@@ -462,6 +472,7 @@ function buildImportedNameMap(
     if (!sf) continue
     processImports(sf, touch)
     processReExports(sf, touch)
+    processDynamicImports(sf, touch)
   }
 
   return importedNames
@@ -484,8 +495,9 @@ function processImports(
     const defaultImport = decl.getDefaultImport()
     if (defaultImport) touch(target, 'default')
 
+    // `import { a as b }` uses the export `a`; `b` is only the local name.
     for (const named of decl.getNamedImports()) {
-      touch(target, named.getAliasNode()?.getText() ?? named.getName())
+      touch(target, named.getName())
     }
   }
 }
@@ -508,6 +520,141 @@ function processReExports(
       touch(target, named.getName())
     }
   }
+}
+
+/**
+ * `import('./x')` uses the exports the code reads from the module. When that
+ * can't be traced, every export counts as used, the same as a namespace import.
+ */
+function processDynamicImports(
+  sf: ReturnType<Project['getSourceFiles']>[number],
+  touch: (file: string, name: string) => void,
+): void {
+  for (const { call, specifier } of getDynamicImportCalls(sf)) {
+    // Resolved the same way the import graph resolves it, so a file can't be kept
+    // live by a dynamic import that this map doesn't see.
+    const resolved = resolveLocalImport(sf, specifier)
+    const targetFile = resolved ? sf.getProject().getSourceFile(resolved) : undefined
+    if (!targetFile) continue
+    const target = targetFile.getFilePath()
+
+    const names = namesReadFromDynamicImport(call)
+    if (names === null) {
+      touch(target, '*')
+      continue
+    }
+    for (const name of names) touch(target, name)
+  }
+}
+
+/**
+ * The exports read from the module an `import()` call loads. Understands:
+ *
+ *   import('./x').then((m) => m.a)        import('./x').then(({ a }) => …)
+ *   const { a } = await import('./x')     (await import('./x')).a
+ *   const m = await import('./x'); m.a
+ *
+ * Returns null for anything else, e.g. the module is returned, stored or passed
+ * on (`lazy(() => import('./x'))`), which the caller treats as "all used".
+ */
+function namesReadFromDynamicImport(call: CallExpression): string[] | null {
+  const promise = outermostParens(call)
+  const parent = promise.getParent()
+
+  // import('./x').then(callback)
+  if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === promise) {
+    const thenCall = parent.getParent()
+    if (
+      parent.getName() !== 'then' ||
+      !Node.isCallExpression(thenCall) ||
+      thenCall.getExpression() !== parent
+    ) {
+      return null
+    }
+    const [callback] = thenCall.getArguments()
+    if (!Node.isArrowFunction(callback) && !Node.isFunctionExpression(callback)) return null
+    const [param] = callback.getParameters()
+    return param ? namesReadThroughBinding(param.getNameNode()) : []
+  }
+
+  // await import('./x')
+  if (!Node.isAwaitExpression(parent)) return null
+  const awaited = outermostParens(parent)
+  const user = awaited.getParent()
+
+  if (Node.isPropertyAccessExpression(user) && user.getExpression() === awaited) {
+    return [user.getName()]
+  }
+  if (Node.isElementAccessExpression(user) && user.getExpression() === awaited) {
+    const key = literalKey(user.getArgumentExpression())
+    return key === null ? null : [key]
+  }
+  if (Node.isVariableDeclaration(user) && user.getInitializer() === awaited) {
+    return namesReadThroughBinding(user.getNameNode())
+  }
+  return null
+}
+
+/** Names read through a binding of the module: `{ a, b: c }`, or a plain identifier. */
+function namesReadThroughBinding(name: Node): string[] | null {
+  if (Node.isIdentifier(name)) return propertiesReadFrom(name)
+  if (!Node.isObjectBindingPattern(name)) return null
+
+  const names: string[] = []
+  for (const element of name.getElements()) {
+    if (element.getDotDotDotToken()) return null
+    const key = element.getPropertyNameNode()
+    if (!key) {
+      names.push(element.getName())
+    } else if (Node.isIdentifier(key)) {
+      names.push(key.getText())
+    } else if (Node.isStringLiteral(key)) {
+      names.push(key.getLiteralValue())
+    } else {
+      return null
+    }
+  }
+  return names
+}
+
+/**
+ * The properties read off a variable that holds the module (`m.a`, `m['a']`), or
+ * null if the variable is used any other way.
+ */
+function propertiesReadFrom(id: Identifier): string[] | null {
+  const names: string[] = []
+  for (const ref of id.findReferencesAsNodes()) {
+    if (ref === id) continue
+    const parent = ref.getParent()
+    if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === ref) {
+      names.push(parent.getName())
+      continue
+    }
+    if (Node.isElementAccessExpression(parent) && parent.getExpression() === ref) {
+      const key = literalKey(parent.getArgumentExpression())
+      if (key === null) return null
+      names.push(key)
+      continue
+    }
+    return null
+  }
+  return names
+}
+
+function literalKey(node: Node | undefined): string | null {
+  return Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)
+    ? node.getLiteralValue()
+    : null
+}
+
+function outermostParens(node: Node): Node {
+  let current = node
+  let parent = current.getParent()
+  while (parent && Node.isParenthesizedExpression(parent)) {
+    current = parent
+    parent = current.getParent()
+  }
+  return current
 }
 
 function loadPackageJson(dir: string): unknown {
