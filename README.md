@@ -180,7 +180,7 @@ Reads **`tsconfig.json`** path aliases. No config file required.
 
 - **Safe to delete** — No in-repo importer; not an entry or ignored framework file (`next.config.*`, `middleware.*`, etc.).  
 - **Transitively dead** — Only imported by files that are already dead.  
-- **Dead exports** — File is still imported, but a named export isn’t used elsewhere (framework route files excluded where exports aren’t normal imports).
+- **Dead exports** — File is still imported, but a named export isn’t used elsewhere (framework route files excluded where exports aren’t normal imports). Exports read through `import()` count as used; when prunify can’t tell which ones are read (for example `React.lazy(() => import('./x'))`), every export of that module does.
 
 Circular files are **not** auto-marked as “safe to delete.”
 
